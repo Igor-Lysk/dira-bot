@@ -1,0 +1,13 @@
+services:
+  dira-bot:
+    build: .
+    container_name: dira-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data    # persist SQLite database
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,8 @@
+# Dira Bot dependencies
+aiogram>=3.7.0
+telethon>=1.42.0
+anthropic>=0.42.0
+aiosqlite>=0.20.0
+apscheduler>=3.10.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
