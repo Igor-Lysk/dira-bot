@@ -55,6 +55,10 @@ async def process_new_listing(raw: dict, db: Database):
         source_id=source_id,
         raw_text=text,
         url=url,
+        price=raw.get("price"),
+        rooms=raw.get("rooms"),
+        address=raw.get("address"),
+        city=raw.get("city"),
     )
 
     if not is_new:
@@ -114,24 +118,27 @@ async def main():
     bot, dp = init_bot(db)
     log.info("Bot initialized")
 
-    # 3. Scheduler
-    scheduler = Scheduler(db)
-    scheduler.start()
-
     # 4. Telegram Monitor (Telethon)
     monitor = TelegramMonitor()
 
     async def on_listing(raw: dict):
-        raw["source"] = "telegram"
+        if "source" not in raw:
+            raw["source"] = "telegram"
         await process_new_listing(raw, db)
 
     await monitor.start(on_listing)
+
+    # 3. Scheduler (needs on_listing for Yad2 polling)
+    scheduler = Scheduler(db, on_listing=on_listing)
+    scheduler.start()
 
     # Send startup message
     stats = await db.get_stats()
     await send_text(
         f"\U0001f680 Dira Bot started!\n\n"
-        f"Monitoring {len(config.TG_CHANNELS)} Telegram channels\n"
+        f"Sources:\n"
+        f"  \U0001f4f1 Telegram: {len(config.TG_CHANNELS)} channels (live)\n"
+        f"  \U0001f3e0 Yad2: Tel Aviv, every 30 min\n\n"
         f"DB: {stats['total_listings']} listings, "
         f"{stats['sent']} sent, {stats['maybe']} maybe\n\n"
         f"Commands: /top /stats /preferences /pause /resume"

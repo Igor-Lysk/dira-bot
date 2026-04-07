@@ -9,6 +9,7 @@ Orchestrates periodic tasks:
 
 import logging
 from datetime import datetime
+from typing import Callable, Awaitable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -23,12 +24,22 @@ log = logging.getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, on_listing: Callable[[dict], Awaitable[None]] = None):
         self._db = db
+        self._on_listing = on_listing
         self._sched = AsyncIOScheduler(timezone=config.TIMEZONE)
 
     def start(self):
         """Register all periodic jobs and start the scheduler."""
+
+        # Yad2 scraping every 30 minutes
+        if self._on_listing:
+            self._sched.add_job(
+                self._collect_yad2,
+                IntervalTrigger(minutes=30),
+                id="yad2_collect",
+                replace_existing=True,
+            )
 
         # Daily digest at 20:00 Israel time
         self._sched.add_job(
@@ -47,8 +58,21 @@ class Scheduler:
         )
 
         self._sched.start()
-        log.info("Scheduler started (digest at %s:00, preferences every 6h)",
-                 config.DIGEST_HOUR)
+        sources = "yad2+digest+preferences" if self._on_listing else "digest+preferences"
+        log.info("Scheduler started (%s) | digest at %s:00", sources, config.DIGEST_HOUR)
+
+    async def _collect_yad2(self):
+        """Fetch Yad2 listings and pass new ones to the pipeline."""
+        from collectors.yad2_page import Yad2PageCollector
+        collector = Yad2PageCollector()
+        try:
+            items = await collector.collect()
+            for raw in items:
+                raw["source"] = "yad2"
+                if self._on_listing:
+                    await self._on_listing(raw)
+        except Exception as e:
+            log.exception("Yad2 collection error: %s", e)
 
     async def _daily_digest(self):
         """Generate and send daily digest."""
