@@ -11,6 +11,7 @@ All run concurrently in a single asyncio event loop.
 
 import asyncio
 import logging
+import re
 import sys
 
 import config
@@ -37,6 +38,36 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 
+# ── Sublet detector ──────────────────────────────────────────────────────────
+#
+# Sublet = аренда комнаты в квартире вместе с другими жильцами.
+# Нельзя просто заблокировать слово "саблет" — встречаются формулировки
+# "не саблет" / "no sublet" (продавец подчёркивает, что это НЕ саблет).
+#
+# Алгоритм: есть признак саблета И нет отрицания рядом.
+
+_SUBLET_RE = re.compile(
+    r"саблет|sublet|שותפ|roommate|flatmate|שכירות\s+משותפת"
+    r"|подселени[ея]|сожитель|комнат[уы]\s+в\s+квартир",
+    re.IGNORECASE,
+)
+_NOT_SUBLET_RE = re.compile(
+    r"(?:не|без|no[tn]?|לא|without)\s{0,8}"
+    r"(?:саблет|sublet|שותפ|roommate|сожител)",
+    re.IGNORECASE,
+)
+
+
+def _is_sublet(text: str) -> bool:
+    """True if listing is a sublet/room-share offer (not an apartment)."""
+    if not _SUBLET_RE.search(text):
+        return False
+    # Explicit negation like "не саблет" / "not a sublet" → it's a real apartment
+    if _NOT_SUBLET_RE.search(text):
+        return False
+    return True
+
+
 # ── Processing pipeline ──────────────────────────────────────────────────────
 
 async def process_new_listing(raw: dict, db: Database):
@@ -47,6 +78,11 @@ async def process_new_listing(raw: dict, db: Database):
     source_id = raw.get("source_id", "")
 
     listing_id = make_id(url, text)
+
+    # Pre-filter: sublets (shared apartment / room rental)
+    if _is_sublet(text):
+        log.debug("Sublet filtered: %s", listing_id)
+        return
 
     # Save to DB (dedup by ID + fingerprint)
     is_new = await db.add_listing(

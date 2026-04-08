@@ -56,8 +56,8 @@ TG_CHANNELS = [
     "aptfornew",
     "ambery_longrent_telaviv",
     "sapirrent",
-    "Sublet_Israel",
     "marianadlanru",
+    # "Sublet_Israel" — removed: channel is for room-sharing/sublets
 ]
 
 # ── Facebook groups (Phase 3, for Apify) ──────────────────────────────────────
