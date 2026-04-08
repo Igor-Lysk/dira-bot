@@ -134,11 +134,17 @@ async def main():
 
     # Send startup message
     stats = await db.get_stats()
+    yad2_line = (
+        "  \U0001f3e0 Yad2: Tel Aviv via Apify, every 2h\n"
+        "  \U0001f4c4 Facebook: 7 groups via Apify, every 2h"
+        if config.APIFY_TOKEN else
+        "  \U0001f3e0 Yad2: Tel Aviv direct, every 30 min"
+    )
     await send_text(
         f"\U0001f680 Dira Bot started!\n\n"
         f"Sources:\n"
         f"  \U0001f4f1 Telegram: {len(config.TG_CHANNELS)} channels (live)\n"
-        f"  \U0001f3e0 Yad2: Tel Aviv, every 30 min\n\n"
+        f"{yad2_line}\n\n"
         f"DB: {stats['total_listings']} listings, "
         f"{stats['sent']} sent, {stats['maybe']} maybe\n\n"
         f"Commands: /top /stats /preferences /pause /resume"

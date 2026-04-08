@@ -32,14 +32,30 @@ class Scheduler:
     def start(self):
         """Register all periodic jobs and start the scheduler."""
 
-        # Yad2 scraping every 30 minutes
         if self._on_listing:
-            self._sched.add_job(
-                self._collect_yad2,
-                IntervalTrigger(minutes=30),
-                id="yad2_collect",
-                replace_existing=True,
-            )
+            if config.APIFY_TOKEN:
+                # Apify Yad2 every 2h (bypasses ShieldSquare on server)
+                self._sched.add_job(
+                    self._collect_apify_yad2,
+                    IntervalTrigger(hours=2),
+                    id="apify_yad2_collect",
+                    replace_existing=True,
+                )
+                # Apify Facebook every 2h
+                self._sched.add_job(
+                    self._collect_apify_facebook,
+                    IntervalTrigger(hours=2),
+                    id="apify_facebook_collect",
+                    replace_existing=True,
+                )
+            else:
+                # Fallback: direct Yad2 page scraping every 30 min (works locally)
+                self._sched.add_job(
+                    self._collect_yad2,
+                    IntervalTrigger(minutes=30),
+                    id="yad2_collect",
+                    replace_existing=True,
+                )
 
         # Daily digest at 20:00 Israel time
         self._sched.add_job(
@@ -58,11 +74,42 @@ class Scheduler:
         )
 
         self._sched.start()
-        sources = "yad2+digest+preferences" if self._on_listing else "digest+preferences"
+        if not self._on_listing:
+            sources = "digest+preferences"
+        elif config.APIFY_TOKEN:
+            sources = "apify_yad2+apify_facebook+digest+preferences"
+        else:
+            sources = "yad2_direct+digest+preferences"
         log.info("Scheduler started (%s) | digest at %s:00", sources, config.DIGEST_HOUR)
 
+    async def _collect_apify_yad2(self):
+        """Fetch Yad2 listings via Apify (bypasses anti-bot on server)."""
+        from collectors.apify_yad2 import ApifyYad2Collector
+        collector = ApifyYad2Collector()
+        try:
+            items = await collector.collect()
+            for raw in items:
+                raw["source"] = "yad2"
+                if self._on_listing:
+                    await self._on_listing(raw)
+        except Exception as e:
+            log.exception("Apify Yad2 collection error: %s", e)
+
+    async def _collect_apify_facebook(self):
+        """Fetch Facebook group posts via Apify."""
+        from collectors.apify_facebook import ApifyFacebookCollector
+        collector = ApifyFacebookCollector()
+        try:
+            items = await collector.collect()
+            for raw in items:
+                raw["source"] = "facebook"
+                if self._on_listing:
+                    await self._on_listing(raw)
+        except Exception as e:
+            log.exception("Apify Facebook collection error: %s", e)
+
     async def _collect_yad2(self):
-        """Fetch Yad2 listings and pass new ones to the pipeline."""
+        """Fetch Yad2 listings via direct page scraping (fallback, works locally)."""
         from collectors.yad2_page import Yad2PageCollector
         collector = Yad2PageCollector()
         try:
