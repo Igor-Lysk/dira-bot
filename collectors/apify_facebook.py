@@ -60,6 +60,10 @@ class ApifyFacebookCollector(BaseCollector):
 
     source_name = "facebook"
 
+    async def backfill(self) -> list[dict]:
+        """Fetch last ~100 posts per group (one-time historical load)."""
+        return await self._collect_with_limit(100)
+
     async def collect(self) -> list[dict]:
         if not config.APIFY_TOKEN:
             log.warning("APIFY_TOKEN not set, skipping Apify Facebook")
@@ -68,9 +72,15 @@ class ApifyFacebookCollector(BaseCollector):
         if not config.FB_GROUPS:
             return []
 
+        return await self._collect_with_limit(POSTS_PER_GROUP)
+
+    async def _collect_with_limit(self, limit: int) -> list[dict]:
+        if not config.APIFY_TOKEN or not config.FB_GROUPS:
+            return []
+
         actor_input = {
             "startUrls": [{"url": g} for g in config.FB_GROUPS],
-            "resultsLimit": POSTS_PER_GROUP,
+            "resultsLimit": limit,
         }
 
         try:
@@ -87,6 +97,8 @@ class ApifyFacebookCollector(BaseCollector):
 
         log.info("Apify Facebook: %d relevant posts (from %d raw)", len(results), len(items))
         return results
+
+
 
     async def _run_actor(self, actor_input: dict) -> list[dict]:
         """Start run, poll until done, return dataset items."""

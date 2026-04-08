@@ -10,6 +10,7 @@ Uses the session string from telegram-mcp.
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Awaitable
 
 from telethon import TelegramClient, events
@@ -50,7 +51,8 @@ class TelegramMonitor(BaseCollector):
     def __init__(self):
         self._client: TelegramClient | None = None
         self._on_listing: Callable[[dict], Awaitable[None]] | None = None
-        self._channel_ids: dict[int, str] = {}  # id → username
+        self._channel_ids: dict[int, str] = {}   # peer_id → username
+        self._entities: dict[str, object] = {}   # username → entity
 
     async def start(self, on_listing: Callable[[dict], Awaitable[None]]):
         """Start monitoring. Calls on_listing(raw_dict) for each new post.
@@ -82,6 +84,7 @@ class TelegramMonitor(BaseCollector):
                 except Exception:
                     pass
                 log.info("  Monitoring: @%s (id=%s)", username, entity.id)
+                self._entities[username] = entity
             except Exception as e:
                 log.warning("  Could not resolve @%s: %s", username, e)
 
@@ -124,6 +127,44 @@ class TelegramMonitor(BaseCollector):
                 await self._on_listing(raw)
             except Exception as e:
                 log.exception("Error in on_listing callback: %s", e)
+
+    async def backfill(self, days: int = 7):
+        """Fetch recent history from all monitored channels.
+
+        Iterates up to `days` days back in each channel and passes
+        matching messages to the on_listing callback. Safe to call
+        repeatedly — dedup in the DB prevents double-processing.
+        """
+        if not self._client or not self._on_listing or not self._entities:
+            return
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+        total = 0
+
+        for username, entity in self._entities.items():
+            count = 0
+            try:
+                async for msg in self._client.iter_messages(entity, limit=500):
+                    if msg.date < cutoff:
+                        break
+                    text = msg.text or ""
+                    if not _looks_like_listing(text):
+                        continue
+                    url = f"https://t.me/{username}/{msg.id}"
+                    raw = {
+                        "source_id": f"tg_{entity.id}_{msg.id}",
+                        "raw_text": text,
+                        "url": url,
+                        "channel": username,
+                    }
+                    await self._on_listing(raw)
+                    count += 1
+            except Exception as e:
+                log.warning("Backfill @%s error: %s", username, e)
+            log.info("Backfill @%s: %d messages", username, count)
+            total += count
+
+        log.info("Telegram backfill complete: %d listings processed", total)
 
     async def collect(self) -> list[dict]:
         """Not used for real-time monitoring — see start() instead.

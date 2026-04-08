@@ -132,6 +132,21 @@ async def main():
     scheduler = Scheduler(db, on_listing=on_listing)
     scheduler.start()
 
+    # Backfill: load recent history from all sources in background
+    async def run_backfill():
+        log.info("Starting backfill (Telegram 7 days + Facebook 100 posts/group)...")
+        await monitor.backfill(days=7)
+        if config.APIFY_TOKEN:
+            from collectors.apify_facebook import ApifyFacebookCollector
+            fb = ApifyFacebookCollector()
+            items = await fb.backfill()
+            for raw in items:
+                raw["source"] = "facebook"
+                await on_listing(raw)
+        log.info("Backfill complete.")
+
+    asyncio.create_task(run_backfill())
+
     # Send startup message
     stats = await db.get_stats()
     yad2_line = (
