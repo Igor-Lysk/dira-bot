@@ -50,18 +50,22 @@ TG_CHANNELS = [
     "BROOTTO",                    # was BROOTTO_Rent, renamed
     "Israel_arenda",
     "fishyTLV",
-    "israel_sublet",              # replaced subletforrussiansinisrael (gone)
+    "israel_sublet",
     "flamingorent",
     "snyat_kvartiruy",
     "aptfornew",
     "ambery_longrent_telaviv",
     "sapirrent",
     "marianadlanru",
+    "jeremy_public",              # Agent Jeremy — Tel Aviv, daily updated listings
+    "jeremy_public_ramat_gan",    # Agent Jeremy — Ramat Gan
+    "olerealty",                  # Ole Realty — Tel Aviv / Jaffa long-term
     # "Sublet_Israel" — removed: channel is for room-sharing/sublets
 ]
 
 # ── Facebook groups (Phase 3, for Apify) ──────────────────────────────────────
 FB_GROUPS = [
+    # Original groups
     "https://www.facebook.com/groups/305724686290054",
     "https://www.facebook.com/groups/457465901082882",
     "https://www.facebook.com/groups/253957624766723",
@@ -69,6 +73,17 @@ FB_GROUPS = [
     "https://www.facebook.com/groups/458499457501175",
     "https://www.facebook.com/groups/509654872819955",
     "https://www.facebook.com/groups/1432828703704444",
+    # Tel Aviv — word of mouth / מפה לאוזן
+    "https://www.facebook.com/groups/35819517694",       # דירות מפה לאוזן בת"א (~20k members)
+    "https://www.facebook.com/groups/101875683484689",   # דירות מפה לאוזן בתל אביב
+    # Tel Aviv — general rent
+    "https://www.facebook.com/groups/912651298791978",   # Secret — Apartments for rent in TLV
+    "https://www.facebook.com/groups/188430365379",      # Tel Aviv Apartments Buy/Sell/Rent (EN)
+    # Ramat Gan / Givatayim
+    "https://www.facebook.com/groups/1092766584127776",  # דירות להשכרה בלבד גבעתיים רמת גן
+    "https://www.facebook.com/groups/1386194455009158",  # דירות במחירים שפויים גבעתיים רמת גן
+    "https://www.facebook.com/groups/402682483445663",   # דירות להשכרה רמת גן/גבעתיים
+    "https://www.facebook.com/groups/186810449287215",   # דירות להשכרה גבעתיים–רמת גן–תל אביב
 ]
 
 # ── Rent keyword filters (reused from facebook_apartments.py) ─────────────────
