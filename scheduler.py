@@ -49,13 +49,7 @@ class Scheduler:
                     replace_existing=True,
                 )
 
-            # Madlan every 2h (no anti-bot, residential proxies not needed)
-            self._sched.add_job(
-                self._collect_madlan,
-                IntervalTrigger(hours=2),
-                id="madlan_collect",
-                replace_existing=True,
-            )
+            else:
                 # Fallback: direct Yad2 page scraping every 30 min (works locally)
                 self._sched.add_job(
                     self._collect_yad2,
@@ -63,6 +57,14 @@ class Scheduler:
                     id="yad2_collect",
                     replace_existing=True,
                 )
+
+            # Madlan every 2h (no anti-bot, works on any IP)
+            self._sched.add_job(
+                self._collect_madlan,
+                IntervalTrigger(hours=2),
+                id="madlan_collect",
+                replace_existing=True,
+            )
 
         # Daily digest at 20:00 Israel time
         self._sched.add_job(
