@@ -48,7 +48,14 @@ class Scheduler:
                     id="apify_facebook_collect",
                     replace_existing=True,
                 )
-            else:
+
+            # Madlan every 2h (no anti-bot, residential proxies not needed)
+            self._sched.add_job(
+                self._collect_madlan,
+                IntervalTrigger(hours=2),
+                id="madlan_collect",
+                replace_existing=True,
+            )
                 # Fallback: direct Yad2 page scraping every 30 min (works locally)
                 self._sched.add_job(
                     self._collect_yad2,
@@ -77,9 +84,9 @@ class Scheduler:
         if not self._on_listing:
             sources = "digest+preferences"
         elif config.APIFY_TOKEN:
-            sources = "apify_yad2+apify_facebook+digest+preferences"
+            sources = "apify_yad2+apify_facebook+madlan+digest+preferences"
         else:
-            sources = "yad2_direct+digest+preferences"
+            sources = "yad2_direct+madlan+digest+preferences"
         log.info("Scheduler started (%s) | digest at %s:00", sources, config.DIGEST_HOUR)
 
     async def _collect_apify_yad2(self):
@@ -107,6 +114,19 @@ class Scheduler:
                     await self._on_listing(raw)
         except Exception as e:
             log.exception("Apify Facebook collection error: %s", e)
+
+    async def _collect_madlan(self):
+        """Fetch Madlan.co.il listings (5 cities, no anti-bot needed)."""
+        from collectors.madlan import MadlanCollector
+        collector = MadlanCollector()
+        try:
+            items = await collector.collect()
+            for raw in items:
+                raw["source"] = "madlan"
+                if self._on_listing:
+                    await self._on_listing(raw)
+        except Exception as e:
+            log.exception("Madlan collection error: %s", e)
 
     async def _collect_yad2(self):
         """Fetch Yad2 listings via direct page scraping (fallback, works locally)."""

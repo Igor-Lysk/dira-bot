@@ -152,6 +152,30 @@ class Database:
         await self._db.commit()
         return True
 
+    async def find_similar(
+        self,
+        price: int | None,
+        rooms: float | None,
+        city: str | None,
+        tolerance: int = 300,
+    ) -> bool:
+        """Cross-source dedup: True if a structurally identical listing already exists.
+
+        Matches on: price ±tolerance AND same rooms AND same city (all non-null).
+        Prevents the same apartment from Yad2 + Telegram + Facebook firing 3 alerts.
+        """
+        if not price or not rooms or not city:
+            return False
+        cur = await self._db.execute(
+            """SELECT 1 FROM listings
+               WHERE price BETWEEN ? AND ?
+                 AND rooms = ?
+                 AND city = ?
+               LIMIT 1""",
+            (price - tolerance, price + tolerance, rooms, city),
+        )
+        return (await cur.fetchone()) is not None
+
     async def get_listing(self, listing_id: str) -> Optional[dict]:
         cur = await self._db.execute(
             "SELECT * FROM listings WHERE id = ?", (listing_id,)

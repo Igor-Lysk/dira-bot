@@ -84,6 +84,15 @@ async def process_new_listing(raw: dict, db: Database):
         log.debug("Sublet filtered: %s", listing_id)
         return
 
+    # Cross-source dedup: same apt posted on Yad2 + Telegram + Facebook
+    if await db.find_similar(
+        price=raw.get("price"),
+        rooms=raw.get("rooms"),
+        city=raw.get("city"),
+    ):
+        log.debug("Cross-source duplicate (price/rooms/city match): %s", listing_id)
+        return
+
     # Save to DB (dedup by ID + fingerprint)
     is_new = await db.add_listing(
         listing_id=listing_id,
@@ -187,9 +196,11 @@ async def main():
     stats = await db.get_stats()
     yad2_line = (
         "  \U0001f3e0 Yad2: Tel Aviv via Apify, every 2h\n"
-        "  \U0001f4c4 Facebook: 7 groups via Apify, every 2h"
+        "  \U0001f4c4 Facebook: 7 groups via Apify, every 2h\n"
+        "  \U0001f3e0 Madlan: 5 cities, every 2h"
         if config.APIFY_TOKEN else
-        "  \U0001f3e0 Yad2: Tel Aviv direct, every 30 min"
+        "  \U0001f3e0 Yad2: Tel Aviv direct, every 30 min\n"
+        "  \U0001f3e0 Madlan: 5 cities, every 2h"
     )
     await send_text(
         f"\U0001f680 Dira Bot started!\n\n"

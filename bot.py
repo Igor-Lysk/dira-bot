@@ -130,6 +130,11 @@ def format_alert(listing: dict, analysis: dict) -> str:
     if url:
         parts += ["", f"\U0001f517 [Open]({url})"]
 
+    if location:
+        maps_query = location.replace(" ", "+")
+        maps_url = f"https://maps.google.com/?q={maps_query}+Tel+Aviv"
+        parts.append(f"\U0001f5fa [Maps]({maps_url})")
+
     return "\n".join(p for p in parts if p is not None)
 
 
