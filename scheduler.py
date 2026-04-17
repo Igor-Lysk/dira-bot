@@ -58,13 +58,14 @@ class Scheduler:
                     replace_existing=True,
                 )
 
-            # Madlan every 2h (no anti-bot, works on any IP)
-            self._sched.add_job(
-                self._collect_madlan,
-                IntervalTrigger(hours=2),
-                id="madlan_collect",
-                replace_existing=True,
-            )
+            # Madlan every 2h — disabled: server IP blocked by anti-bot (same as Yad2)
+            # TODO: re-enable when proxy solution is in place
+            # self._sched.add_job(
+            #     self._collect_madlan,
+            #     IntervalTrigger(hours=2),
+            #     id="madlan_collect",
+            #     replace_existing=True,
+            # )
 
         # Daily digest at 20:00 Israel time
         self._sched.add_job(
@@ -86,9 +87,9 @@ class Scheduler:
         if not self._on_listing:
             sources = "digest+preferences"
         elif config.APIFY_TOKEN:
-            sources = "apify_yad2+apify_facebook+madlan+digest+preferences"
+            sources = "apify_yad2+apify_facebook+digest+preferences"
         else:
-            sources = "yad2_direct+madlan+digest+preferences"
+            sources = "yad2_direct+digest+preferences"
         log.info("Scheduler started (%s) | digest at %s:00", sources, config.DIGEST_HOUR)
 
     async def _collect_apify_yad2(self):

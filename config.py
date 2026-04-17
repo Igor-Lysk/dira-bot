@@ -47,20 +47,22 @@ YAD2_CHECK_INTERVAL = 30 * 60  # seconds
 
 # ── Telegram channels to monitor ──────────────────────────────────────────────
 TG_CHANNELS = [
-    "BROOTTO",                    # was BROOTTO_Rent, renamed
-    "Israel_arenda",
-    "fishyTLV",
-    "israel_sublet",
-    "flamingorent",
-    "snyat_kvartiruy",
-    "aptfornew",
-    "ambery_longrent_telaviv",
-    "sapirrent",
-    "marianadlanru",
-    "jeremy_public",              # Agent Jeremy — Tel Aviv, daily updated listings
-    "jeremy_public_ramat_gan",    # Agent Jeremy — Ramat Gan
-    "olerealty",                  # Ole Realty — Tel Aviv / Jaffa long-term
-    # "Sublet_Israel" — removed: channel is for room-sharing/sublets
+    # ── Active ────────────────────────────────────────────────────────────────
+    "Israel_arenda",              # Аренда в Израиле (рус) ✅
+    "flamingorent",               # Аренда ✅ (бывает Хайфа, Claude фильтрует)
+    "snyat_kvartiruy",            # Снять квартиру (рус) ✅
+    "aptfornew",                  # Квартиры репатриантам ✅
+    "ambery_longrent_telaviv",    # Долгосрочная аренда ТА ✅
+    "jeremy_public",              # Agent Jeremy — Тель-Авив ✅
+    "jeremy_public_ramat_gan",    # Agent Jeremy — Рамат-Ган ✅
+    # ── Removed (dead / wrong) ────────────────────────────────────────────────
+    # "BROOTTO"           — переименован в канал про работу (последнее сообщение 2023)
+    # "fishyTLV"          — заброшен (последнее сообщение 2022)
+    # "sapirrent"         — заброшен (вакансии, последнее сообщение 2025)
+    # "marianadlanru"     — заброшен (последнее сообщение 2024)
+    # "olerealty"         — заброшен (последнее сообщение 2020)
+    # "israel_sublet"     — только саблеты, всё фильтруется
+    # "Sublet_Israel"     — только саблеты
 ]
 
 # ── Facebook groups (Phase 3, for Apify) ──────────────────────────────────────
