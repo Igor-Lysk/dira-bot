@@ -24,6 +24,9 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 # ── Apify (Phase 3) ──────────────────────────────────────────────────────────
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 
+# ── ScraperAPI (Yad2 + Madlan proxy to bypass server IP block) ────────────────
+SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")
+
 # ── Search criteria ───────────────────────────────────────────────────────────
 MIN_ROOMS = 2.0          # 2+ rooms (Israeli count)
 MAX_PRICE = 7000          # NIS/month

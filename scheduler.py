@@ -49,23 +49,31 @@ class Scheduler:
                     replace_existing=True,
                 )
 
-            else:
-                # Fallback: direct Yad2 page scraping every 30 min (works locally)
+            if config.SCRAPERAPI_KEY:
+                # ScraperAPI: direct Yad2 every 30 min (bypasses server IP block cheaply)
+                # Runs alongside Apify if both are set; cross-source dedup handles overlaps
+                self._sched.add_job(
+                    self._collect_yad2,
+                    IntervalTrigger(minutes=30),
+                    id="yad2_direct_collect",
+                    replace_existing=True,
+                )
+                # ScraperAPI: Madlan every 2h (re-enabled — was blocked without proxy)
+                self._sched.add_job(
+                    self._collect_madlan,
+                    IntervalTrigger(hours=2),
+                    id="madlan_collect",
+                    replace_existing=True,
+                )
+
+            elif not config.APIFY_TOKEN:
+                # No proxy at all: direct Yad2 (works locally, may be blocked on server)
                 self._sched.add_job(
                     self._collect_yad2,
                     IntervalTrigger(minutes=30),
                     id="yad2_collect",
                     replace_existing=True,
                 )
-
-            # Madlan every 2h — disabled: server IP blocked by anti-bot (same as Yad2)
-            # TODO: re-enable when proxy solution is in place
-            # self._sched.add_job(
-            #     self._collect_madlan,
-            #     IntervalTrigger(hours=2),
-            #     id="madlan_collect",
-            #     replace_existing=True,
-            # )
 
         # Daily digest at 20:00 Israel time
         self._sched.add_job(
