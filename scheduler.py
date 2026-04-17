@@ -94,10 +94,16 @@ class Scheduler:
         self._sched.start()
         if not self._on_listing:
             sources = "digest+preferences"
-        elif config.APIFY_TOKEN:
-            sources = "apify_yad2+apify_facebook+digest+preferences"
         else:
-            sources = "yad2_direct+digest+preferences"
+            parts = []
+            if config.APIFY_TOKEN:
+                parts += ["apify_yad2", "apify_facebook"]
+            if config.SCRAPERAPI_KEY:
+                parts += ["yad2_scraperapi", "madlan_scraperapi"]
+            elif not config.APIFY_TOKEN:
+                parts += ["yad2_direct"]
+            parts += ["digest", "preferences"]
+            sources = "+".join(parts)
         log.info("Scheduler started (%s) | digest at %s:00", sources, config.DIGEST_HOUR)
 
     async def _collect_apify_yad2(self):
