@@ -41,10 +41,10 @@ class Scheduler:
                     id="apify_yad2_collect",
                     replace_existing=True,
                 )
-                # Apify Facebook every 2h
+                # Apify Facebook every 12h (paid-per-event actor — keep events low)
                 self._sched.add_job(
                     self._collect_apify_facebook,
-                    IntervalTrigger(hours=2),
+                    IntervalTrigger(hours=12),
                     id="apify_facebook_collect",
                     replace_existing=True,
                 )

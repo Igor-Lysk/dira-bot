@@ -179,15 +179,26 @@ async def main():
 
     # Backfill: load recent history from all sources in background
     async def run_backfill():
-        log.info("Starting backfill (Telegram 7 days + Facebook 100 posts/group)...")
+        log.info("Starting backfill (Telegram 7 days)...")
         await monitor.backfill(days=7)
+
         if config.APIFY_TOKEN:
-            from collectors.apify_facebook import ApifyFacebookCollector
-            fb = ApifyFacebookCollector()
-            items = await fb.backfill()
-            for raw in items:
-                raw["source"] = "facebook"
-                await on_listing(raw)
+            # Facebook backfill: only run once (residential proxies are expensive).
+            # Skip if we already have Facebook posts in the DB.
+            fb_stats = await db.get_stats()
+            fb_count = fb_stats.get("by_source", {}).get("facebook", 0)
+            if fb_count == 0:
+                log.info("Facebook backfill: fetching ~15 posts/group (first-time only)...")
+                from collectors.apify_facebook import ApifyFacebookCollector
+                fb = ApifyFacebookCollector()
+                items = await fb.backfill()
+                for raw in items:
+                    raw["source"] = "facebook"
+                    await on_listing(raw)
+                log.info("Facebook backfill: done (%d items fetched)", len(items))
+            else:
+                log.info("Facebook backfill: skipped (already have %d FB posts in DB)", fb_count)
+
         log.info("Backfill complete.")
 
     asyncio.create_task(run_backfill())

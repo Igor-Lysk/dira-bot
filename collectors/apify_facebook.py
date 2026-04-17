@@ -19,7 +19,7 @@ APIFY_BASE = "https://api.apify.com/v2"
 ACTOR_ID = "apify~facebook-groups-scraper"
 POLL_INTERVAL = 5
 MAX_POLLS = 90      # 7.5 minutes max (Facebook is slower)
-POSTS_PER_GROUP = 20
+POSTS_PER_GROUP = 5  # keep low — residential proxies are expensive ($10/GB)
 
 
 def _is_relevant(text: str) -> bool:
@@ -61,8 +61,9 @@ class ApifyFacebookCollector(BaseCollector):
     source_name = "facebook"
 
     async def backfill(self) -> list[dict]:
-        """Fetch last ~100 posts per group (one-time historical load)."""
-        return await self._collect_with_limit(100)
+        """Fetch last ~15 posts per group (one-time historical load).
+        Keep low: residential proxies are expensive. Called once on first start."""
+        return await self._collect_with_limit(15)
 
     async def collect(self) -> list[dict]:
         if not config.APIFY_TOKEN:
