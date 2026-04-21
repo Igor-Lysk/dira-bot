@@ -3,13 +3,19 @@
 ## Bugs
 
 - [x] **Разобраться, почему объявления из Telegram не приходят в реальном времени**
-  **Найдено (21.04):** `NewMessage(chats=[raw_ids])` не совпадал с channel events — Telegram
-  каналы используют marked peer ID (`-1001xxxxxxxxx`), а не raw ID (`entity.id`).
+  **Найдено (21.04 утро):** `NewMessage(chats=[raw_ids])` не совпадал с channel events —
+  Telegram каналы используют marked peer ID (`-1001xxxxxxxxx`), а не raw `entity.id`.
   Код пробовал добавить оба, но `except Exception: pass` молча глотал ошибки.
-  **Исправлено:** переключились на `add_event_handler(entities)` (передаём объекты, не ID)
-  + добавлен `asyncio.create_task(client.run_until_disconnected())` для надёжности.
-  **Статус:** задеплоено 21.04, ожидается подтверждение на первых real-time постах.
-  В логах появятся строки `DEBUG TG event: chat_id=... len=...` когда сработает.
+  **Правка 1:** `add_event_handler(entities)` (передаём объекты) +
+  `asyncio.create_task(client.run_until_disconnected())`.
+  **После 7ч наблюдения:** всё ещё 0 событий (`grep 'TG event' → 0`). Бэкфил собрал
+  204 поста, handler молчал.
+  **Реальная причина (21.04 вечер):** Telethon шлёт real-time `NewMessage` только для
+  диалогов, где user участвует. `iter_messages` работает на public каналах без подписки,
+  а live-апдейты — нет.
+  **Правка 2:** в `start()` перед регистрацией handler'а вызываем `JoinChannelRequest`
+  для каждого entity (идемпотентно).
+  **Статус:** задеплоено 21.04 вечером. Подтверждение — строки `DEBUG TG event:` в логах.
 
 - [ ] **Madlan через ScraperAPI не работает** — все 5 городов возвращают "no NEXT_DATA (blocked?)"
   ScraperAPI не проходит anti-bot Madlan. Нужно либо другой прокси, либо отключить Madlan.

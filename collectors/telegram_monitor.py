@@ -16,6 +16,7 @@ from typing import Callable, Awaitable
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat
+from telethon.tl.functions.channels import JoinChannelRequest
 from telethon import utils as tl_utils
 
 import config
@@ -91,6 +92,19 @@ class TelegramMonitor(BaseCollector):
         if not self._channel_ids:
             log.error("No channels resolved! Check TG_CHANNELS config.")
             return
+
+        # Telethon fires real-time NewMessage updates only for dialogs the
+        # user participates in. Backfill via iter_messages works on public
+        # channels without membership, but live events don't arrive.
+        # So: auto-join every monitored channel. Idempotent — joining a
+        # channel you're already in is a no-op on Telegram's side.
+        for username, entity in self._entities.items():
+            try:
+                await self._client(JoinChannelRequest(entity))
+                log.info("  Joined @%s", username)
+            except Exception as e:
+                # Already a participant / banned / rate-limited — non-fatal.
+                log.debug("  Join @%s skipped: %s", username, e)
 
         # Register event handler using entity objects (not IDs).
         # Passing IDs is unreliable for channels: Telegram channels use a
