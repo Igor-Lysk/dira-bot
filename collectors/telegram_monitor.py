@@ -92,10 +92,18 @@ class TelegramMonitor(BaseCollector):
             log.error("No channels resolved! Check TG_CHANNELS config.")
             return
 
-        # Register event handler for new messages in monitored channels
-        @self._client.on(events.NewMessage(chats=list(self._channel_ids.keys())))
-        async def _handler(event):
-            await self._handle_message(event)
+        # Register event handler using entity objects (not IDs).
+        # Passing IDs is unreliable for channels: Telegram channels use a
+        # "marked" peer ID (-1001xxxxxxxxx) that differs from entity.id.
+        # Telethon resolves entities correctly when given the objects directly.
+        self._client.add_event_handler(
+            self._handle_message,
+            events.NewMessage(chats=list(self._entities.values())),
+        )
+
+        # Keep Telethon's update-receiving loop alive in the background.
+        # Without this task, incoming channel updates may never fire handlers.
+        asyncio.create_task(self._client.run_until_disconnected())
 
         unique_channels = len(set(self._channel_ids.values()))
         log.info("Listening for new messages in %d channels...", unique_channels)
@@ -103,6 +111,7 @@ class TelegramMonitor(BaseCollector):
     async def _handle_message(self, event):
         """Process a new message from a monitored channel."""
         text = event.message.text or ""
+        log.debug("TG event: chat_id=%s len=%d", event.chat_id, len(text))
         if not _looks_like_listing(text):
             return
 

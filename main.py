@@ -36,6 +36,8 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 logging.getLogger("aiogram").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
+# Show DEBUG from telegram_monitor to diagnose real-time event reception
+logging.getLogger("collectors.telegram_monitor").setLevel(logging.DEBUG)
 
 
 # ── Sublet detector ──────────────────────────────────────────────────────────
