@@ -33,6 +33,11 @@ class Scheduler:
         """Register all periodic jobs and start the scheduler."""
 
         if self._on_listing:
+            # Kick free scrapers immediately on start so we don't wait up to 2h
+            # for the first batch after a restart. Facebook stays on schedule —
+            # it's paid-per-event and restarts shouldn't re-burn credits.
+            now = datetime.now()
+
             if config.APIFY_TOKEN:
                 # Apify Yad2 every 2h (bypasses ShieldSquare on server)
                 self._sched.add_job(
@@ -40,6 +45,7 @@ class Scheduler:
                     IntervalTrigger(hours=2),
                     id="apify_yad2_collect",
                     replace_existing=True,
+                    next_run_time=now,
                 )
                 # Apify Facebook every 12h (paid-per-event actor — keep events low)
                 self._sched.add_job(
@@ -57,6 +63,7 @@ class Scheduler:
                     IntervalTrigger(minutes=30),
                     id="yad2_direct_collect",
                     replace_existing=True,
+                    next_run_time=now,
                 )
                 # ScraperAPI: Madlan every 2h (re-enabled — was blocked without proxy)
                 self._sched.add_job(
@@ -64,6 +71,7 @@ class Scheduler:
                     IntervalTrigger(hours=2),
                     id="madlan_collect",
                     replace_existing=True,
+                    next_run_time=now,
                 )
 
             elif not config.APIFY_TOKEN:
@@ -73,6 +81,7 @@ class Scheduler:
                     IntervalTrigger(minutes=30),
                     id="yad2_collect",
                     replace_existing=True,
+                    next_run_time=now,
                 )
 
         # Daily digest at 20:00 Israel time
