@@ -91,6 +91,16 @@ class Scheduler:
             replace_existing=True,
         )
 
+        # Healthchecks.io heartbeat ping
+        if config.HEALTHCHECK_URL:
+            self._sched.add_job(
+                self._healthcheck_ping,
+                IntervalTrigger(minutes=config.HEALTHCHECK_INTERVAL_MIN),
+                id="healthcheck_ping",
+                replace_existing=True,
+                next_run_time=datetime.now(),
+            )
+
         self._sched.start()
         if not self._on_listing:
             sources = "digest+preferences"
@@ -227,6 +237,14 @@ class Scheduler:
 
         except Exception as e:
             log.exception("Preference learning error: %s", e)
+
+    async def _healthcheck_ping(self):
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.get(config.HEALTHCHECK_URL)
+        except Exception as e:
+            log.warning("Healthcheck ping failed: %s", e)
 
     def stop(self):
         self._sched.shutdown(wait=False)

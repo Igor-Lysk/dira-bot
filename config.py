@@ -27,6 +27,10 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 # ── ScraperAPI (Yad2 + Madlan proxy to bypass server IP block) ────────────────
 SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")
 
+# ── Healthchecks.io (external watchdog — alerts to Telegram if bot goes silent) ─
+HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
+HEALTHCHECK_INTERVAL_MIN = 10
+
 # ── Search criteria ───────────────────────────────────────────────────────────
 MIN_ROOMS = 2.0          # 2+ rooms (Israeli count)
 MAX_PRICE = 7000          # NIS/month
