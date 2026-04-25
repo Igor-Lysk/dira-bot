@@ -46,6 +46,7 @@ class Scheduler:
                     id="apify_yad2_collect",
                     replace_existing=True,
                     next_run_time=now,
+                    misfire_grace_time=None,
                 )
                 # Apify Facebook every 12h (paid-per-event actor — keep events low)
                 self._sched.add_job(
@@ -79,6 +80,7 @@ class Scheduler:
                     id="madlan_collect",
                     replace_existing=True,
                     next_run_time=now,
+                    misfire_grace_time=None,
                 )
 
             elif not config.APIFY_TOKEN:
