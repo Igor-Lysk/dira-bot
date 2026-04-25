@@ -4,6 +4,8 @@ services:
     container_name: dira-bot
     restart: unless-stopped
     env_file: .env
+    depends_on:
+      - flaresolverr
     volumes:
       - ./data:/app/data    # persist SQLite database
     logging:
@@ -11,3 +13,25 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Headless Chrome proxy that solves Cloudflare/Reblaze JS challenges.
+  # Used as the last-resort fallback when paid providers run out of quota.
+  # Memory-capped so a Chrome leak can't OOM the whole VPS.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    mem_limit: 600m
+    memswap_limit: 600m
+    environment:
+      LOG_LEVEL: info
+      LOG_HTML: "false"
+      CAPTCHA_SOLVER: none
+      TZ: Asia/Jerusalem
+      # Tighten Chrome lifetime so leaked tabs are reaped faster.
+      BROWSER_TIMEOUT: "40000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
