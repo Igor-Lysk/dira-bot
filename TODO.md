@@ -24,8 +24,8 @@
 - [x] **Отправлять сообщение в Telegram-чат, когда бот перестаёт работать** (health-check / dead-man switch)
   **Решение:** healthchecks.io — бот пингует каждые 10 мин, при тишине > 30 мин → один алерт от `@healthchecks_io_bot` в Telegram (личка). URL в `.env` как `HEALTHCHECK_URL`. Задеплоено 23.04.
 
-- [ ] **Madlan: прокси проходят, но `__NEXT_DATA__` отсутствует**
-  Уточнено 25.04: Scrape.do и ScrapingBee возвращают 90-145KB реального HTML (anti-bot пройден), но Madlan мигрировал на client-side rendering — нужный нам JSON в этой пачке HTML не приезжает. Возможные решения: FlareSolverr с длинным `BROWSER_TIMEOUT` чтобы дождаться XHR-запросов; либо реверс-инжиниринг внутреннего API Madlan; либо отключить Madlan совсем.
+- [ ] **Madlan job отключён до появления FlareSolverr (25.04)**
+  Прокси (ScraperAPI/Scrape.do/ScrapingBee) проходят anti-bot, но HTML-ответ ~100-140KB содержит только `reduxInitialState` с `loading: true, data: null` — реальные листинги загружаются через GraphQL XHR уже после рендера. Scrape.do даже с `customWait=10000` не дожидается. Каждый запрос жжёт квоту — отключили в `scheduler.py`. Возврат после FlareSolverr (real browser с длинным wait), либо после реверса GraphQL endpoint.
 
 ## С 1 мая (Apify сбрасывает лимит)
 

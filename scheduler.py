@@ -65,23 +65,22 @@ class Scheduler:
             ])
 
             if has_proxy:
-                # Direct Yad2 every 30 min via the proxy chain
+                # Direct Yad2 every hour via the proxy chain. New listings on
+                # page 1 turn over slowly, so 30-min cycles produced ~100%
+                # duplicates and burned proxy quotas for nothing.
                 self._sched.add_job(
                     self._collect_yad2,
-                    IntervalTrigger(minutes=30),
+                    IntervalTrigger(hours=1),
                     id="yad2_direct_collect",
                     replace_existing=True,
                     next_run_time=now,
                 )
-                # Madlan every 2h via the proxy chain
-                self._sched.add_job(
-                    self._collect_madlan,
-                    IntervalTrigger(hours=2),
-                    id="madlan_collect",
-                    replace_existing=True,
-                    next_run_time=now,
-                    misfire_grace_time=None,
-                )
+                # Madlan disabled (2026-04-25): site moved to client-side
+                # GraphQL fetching, the HTML response contains no listings
+                # data even with JS rendering enabled. Each call still
+                # consumes proxy quota — would burn 1800 Scrape.do credits/mo
+                # for zero results. Re-enable once FlareSolverr is in place
+                # (real browser can wait for the XHR and get full data).
 
             elif not config.APIFY_TOKEN:
                 # No proxy at all: direct Yad2 (works locally, may be blocked on server)
@@ -134,7 +133,7 @@ class Scheduler:
             if config.SCRAPINGBEE_KEY:
                 proxy_names.append("scrapingbee")
             if proxy_names:
-                parts += [f"yad2[{'+'.join(proxy_names)}]", "madlan"]
+                parts += [f"yad2[{'+'.join(proxy_names)}]"]
             elif not config.APIFY_TOKEN:
                 parts += ["yad2_direct"]
             parts += ["digest", "preferences"]
