@@ -10,12 +10,10 @@ Runs every 2 hours via scheduler (same cadence as Apify Yad2).
 import logging
 import re
 import json
-import urllib.parse
-
-import httpx
 
 import config
 from collectors.base import BaseCollector
+from collectors._fetch import fetch
 
 log = logging.getLogger(__name__)
 
@@ -27,13 +25,6 @@ CITIES = [
     ("bat-yam-israel",         "בת ים"),
     ("holon-israel",           "חולון"),
 ]
-
-def _scraper_url(url: str) -> str:
-    """Wrap URL with ScraperAPI proxy if key is configured (bypasses server IP block)."""
-    if config.SCRAPERAPI_KEY:
-        return f"https://api.scraperapi.com/?api_key={config.SCRAPERAPI_KEY}&url={urllib.parse.quote(url, safe='')}"
-    return url
-
 
 HEADERS = {
     "User-Agent": (
@@ -181,30 +172,18 @@ class MadlanCollector(BaseCollector):
         results = []
         filters = f"?dealType=rent&minRooms={int(config.MIN_ROOMS)}&maxPrice={config.MAX_PRICE}"
 
-        via = "ScraperAPI" if config.SCRAPERAPI_KEY else "direct"
-        async with httpx.AsyncClient(
-            headers=HEADERS,
-            follow_redirects=True,
-            timeout=60,  # ScraperAPI can be slower
-        ) as client:
-            for city_slug, city_heb in CITIES:
-                raw_url = f"https://www.madlan.co.il/for-rent/{city_slug}{filters}"
-                url = _scraper_url(raw_url)
-                try:
-                    r = await client.get(url)
-                    if r.status_code != 200:
-                        log.warning("Madlan %s: HTTP %s (via %s)", city_heb, r.status_code, via)
-                        continue
-                    if "__NEXT_DATA__" not in r.text:
-                        log.warning("Madlan %s: no NEXT_DATA (blocked?) via %s", city_heb, via)
-                        continue
-
-                    items = _parse_page(r.text, city_heb)
-                    log.info("Madlan %s: %d listings", city_heb, len(items))
-                    results.extend(items)
-
-                except Exception as e:
-                    log.warning("Madlan %s error: %s", city_heb, e)
+        for city_slug, city_heb in CITIES:
+            raw_url = f"https://www.madlan.co.il/for-rent/{city_slug}{filters}"
+            try:
+                resp = await fetch(raw_url, headers=HEADERS, expect_marker="__NEXT_DATA__")
+                if resp is None:
+                    log.warning("Madlan %s: all providers failed", city_heb)
+                    continue
+                items = _parse_page(resp.text, city_heb)
+                log.info("Madlan %s: %d listings", city_heb, len(items))
+                results.extend(items)
+            except Exception as e:
+                log.warning("Madlan %s error: %s", city_heb, e)
 
         log.info("Madlan total: %d listings across %d cities", len(results), len(CITIES))
         return results

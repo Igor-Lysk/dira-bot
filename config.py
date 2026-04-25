@@ -24,8 +24,11 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 # ── Apify (Phase 3) ──────────────────────────────────────────────────────────
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 
-# ── ScraperAPI (Yad2 + Madlan proxy to bypass server IP block) ────────────────
-SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")
+# ── Anti-bot proxy providers (Yad2 + Madlan), tried in order ──────────────────
+# Each has a free tier. When one returns 4xx/blocked, we fall back to the next.
+SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")     # 5000/mo first month, 1000/mo after
+SCRAPEDO_KEY = os.getenv("SCRAPEDO_KEY", "")         # 1000 req/mo with JS rendering
+SCRAPINGBEE_KEY = os.getenv("SCRAPINGBEE_KEY", "")   # 1000 credits/mo (~200 req with JS)
 
 # ── Healthchecks.io (external watchdog — alerts to Telegram if bot goes silent) ─
 HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")

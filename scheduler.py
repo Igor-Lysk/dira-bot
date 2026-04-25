@@ -55,9 +55,16 @@ class Scheduler:
                     replace_existing=True,
                 )
 
-            if config.SCRAPERAPI_KEY:
-                # ScraperAPI: direct Yad2 every 30 min (bypasses server IP block cheaply)
-                # Runs alongside Apify if both are set; cross-source dedup handles overlaps
+            # Any anti-bot proxy provider configured? collectors/_fetch.py handles
+            # the fallback chain (ScraperAPI → Scrape.do → ScrapingBee).
+            has_proxy = any([
+                config.SCRAPERAPI_KEY,
+                config.SCRAPEDO_KEY,
+                config.SCRAPINGBEE_KEY,
+            ])
+
+            if has_proxy:
+                # Direct Yad2 every 30 min via the proxy chain
                 self._sched.add_job(
                     self._collect_yad2,
                     IntervalTrigger(minutes=30),
@@ -65,7 +72,7 @@ class Scheduler:
                     replace_existing=True,
                     next_run_time=now,
                 )
-                # ScraperAPI: Madlan every 2h (re-enabled — was blocked without proxy)
+                # Madlan every 2h via the proxy chain
                 self._sched.add_job(
                     self._collect_madlan,
                     IntervalTrigger(hours=2),
@@ -117,8 +124,15 @@ class Scheduler:
             parts = []
             if config.APIFY_TOKEN:
                 parts += ["apify_yad2", "apify_facebook"]
+            proxy_names = []
             if config.SCRAPERAPI_KEY:
-                parts += ["yad2_scraperapi", "madlan_scraperapi"]
+                proxy_names.append("scraperapi")
+            if config.SCRAPEDO_KEY:
+                proxy_names.append("scrapedo")
+            if config.SCRAPINGBEE_KEY:
+                proxy_names.append("scrapingbee")
+            if proxy_names:
+                parts += [f"yad2[{'+'.join(proxy_names)}]", "madlan"]
             elif not config.APIFY_TOKEN:
                 parts += ["yad2_direct"]
             parts += ["digest", "preferences"]

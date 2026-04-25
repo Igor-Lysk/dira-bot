@@ -21,7 +21,8 @@
   **Причина:** rootless docker упал 17.04 (containerd/boltdb timeout), 22.04 VPS перезагрузили — docker не поднялся сам, т.к. автостарт был только через `.profile` при SSH-логине.
   **Починка (23.04):** создан user-systemd unit `~/.config/systemd/user/docker.service`, enabled + started. Linger=yes → поднимается на boot VPS.
 
-- [ ] **Отправлять сообщение в Telegram-чат, когда бот перестаёт работать** (health-check / dead-man switch)
+- [x] **Отправлять сообщение в Telegram-чат, когда бот перестаёт работать** (health-check / dead-man switch)
+  **Решение:** healthchecks.io — бот пингует каждые 10 мин, при тишине > 30 мин → один алерт от `@healthchecks_io_bot` в Telegram (личка). URL в `.env` как `HEALTHCHECK_URL`. Задеплоено 23.04.
 
 - [ ] **Madlan через ScraperAPI не работает** — все 5 городов возвращают "no NEXT_DATA (blocked?)"
   ScraperAPI не проходит anti-bot Madlan. Нужно либо другой прокси, либо отключить Madlan.

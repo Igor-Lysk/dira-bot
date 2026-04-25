@@ -15,13 +15,11 @@ import json
 import logging
 import random
 import re
-import urllib.parse
 from typing import Optional
-
-import httpx
 
 import config
 from collectors.base import BaseCollector
+from collectors._fetch import fetch
 
 log = logging.getLogger(__name__)
 
@@ -40,13 +38,6 @@ YAD2_URL = (
 # Tag IDs that indicate mamad
 MAMAD_TAG_IDS = {1009}
 MAMAD_TAG_NAMES = {"ממ\"ד", 'ממ"ד', "ממד", "ממ'ד"}
-
-def _scraper_url(url: str) -> str:
-    """Wrap URL with ScraperAPI proxy if key is configured (bypasses server IP block)."""
-    if config.SCRAPERAPI_KEY:
-        return f"https://api.scraperapi.com/?api_key={config.SCRAPERAPI_KEY}&url={urllib.parse.quote(url, safe='')}"
-    return url
-
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -118,7 +109,6 @@ class Yad2PageCollector(BaseCollector):
 
     async def collect(self) -> list[dict]:
         """Fetch one page of Yad2 listings. Returns [] on block/error."""
-        via = "ScraperAPI" if config.SCRAPERAPI_KEY else "direct"
         headers = {
             "User-Agent": random.choice(_USER_AGENTS),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -132,26 +122,12 @@ class Yad2PageCollector(BaseCollector):
             "Upgrade-Insecure-Requests": "1",
         }
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=60,   # ScraperAPI can be slower
-                follow_redirects=True,
-                headers=headers,
-            ) as client:
-                resp = await client.get(_scraper_url(YAD2_URL))
-                resp.raise_for_status()
-
-            content = resp.text
-        except Exception as e:
-            log.warning("Yad2 fetch failed (%s): %s", via, e)
-            return []
-
-        if "__NEXT_DATA__" not in content:
-            log.warning("Yad2: blocked by anti-bot (no __NEXT_DATA__) via %s", via)
+        resp = await fetch(YAD2_URL, headers=headers, expect_marker="__NEXT_DATA__")
+        if resp is None:
             return []
 
         try:
-            items = self._parse_feed(content)
+            items = self._parse_feed(resp.text)
         except Exception as e:
             log.exception("Yad2 parse error: %s", e)
             return []
