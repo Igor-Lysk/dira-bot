@@ -175,12 +175,20 @@ class MadlanCollector(BaseCollector):
         for city_slug, city_heb in CITIES:
             raw_url = f"https://www.madlan.co.il/for-rent/{city_slug}{filters}"
             try:
-                resp = await fetch(raw_url, headers=HEADERS, expect_marker="__NEXT_DATA__")
+                # Don't enforce __NEXT_DATA__ — Madlan increasingly relies on
+                # client-side rendering and the proxies often return a partial
+                # HTML shell. Let _parse_page decide whether the response is
+                # usable; an empty list is fine, anti-bot is still detected
+                # via Reblaze marker in _fetch.
+                resp = await fetch(raw_url, headers=HEADERS)
                 if resp is None:
                     log.warning("Madlan %s: all providers failed", city_heb)
                     continue
                 items = _parse_page(resp.text, city_heb)
-                log.info("Madlan %s: %d listings", city_heb, len(items))
+                if not items and "__NEXT_DATA__" not in resp.text:
+                    log.warning("Madlan %s: no NEXT_DATA in %d-byte response", city_heb, len(resp.text))
+                else:
+                    log.info("Madlan %s: %d listings", city_heb, len(items))
                 results.extend(items)
             except Exception as e:
                 log.warning("Madlan %s error: %s", city_heb, e)
