@@ -4,10 +4,12 @@ services:
     container_name: dira-bot
     restart: unless-stopped
     env_file: .env
-    depends_on:
-      - flaresolverr
     volumes:
       - ./data:/app/data    # persist SQLite database
+      # Read/write access to host docker socket so the bot can lazy-start /
+      # stop the flaresolverr container on demand. Path is the rootless
+      # docker socket on the Berlin VPS.
+      - /var/run/docker/run/docker.sock:/var/run/docker.sock
     logging:
       driver: json-file
       options:
@@ -15,12 +17,14 @@ services:
         max-file: "3"
 
   # Headless Chrome proxy that solves Cloudflare/Reblaze JS challenges.
-  # Used as the last-resort fallback when paid providers run out of quota.
-  # Memory-capped so a Chrome leak can't OOM the whole VPS.
+  # NOT started by default — dira-bot starts it on demand via the docker
+  # socket when all paid proxy providers fail, and stops it after 10 min
+  # of idle. The `manual` profile excludes it from `docker compose up`.
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
-    restart: unless-stopped
+    profiles: ["manual"]
+    restart: "no"
     mem_limit: 900m
     memswap_limit: 900m
     environment:
@@ -28,7 +32,6 @@ services:
       LOG_HTML: "false"
       CAPTCHA_SOLVER: none
       TZ: Asia/Jerusalem
-      # Tighten Chrome lifetime so leaked tabs are reaped faster.
       BROWSER_TIMEOUT: "40000"
     logging:
       driver: json-file

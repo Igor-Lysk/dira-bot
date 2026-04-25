@@ -73,34 +73,48 @@ async def _via_scrapingbee(client, url, headers):
 
 
 async def _via_flaresolverr(client, url, headers):
-    """Self-hosted headless Chrome bypass. Slow (~5-15s) but no quota."""
-    payload = {
-        "cmd": "request.get",
-        "url": url,
-        "maxTimeout": 60000,
-    }
-    try:
-        r = await client.post(FLARESOLVERR_URL, json=payload, timeout=90)
-    except httpx.ConnectError:
-        return None  # FlareSolverr container not running — skip silently
-    r.raise_for_status()
+    """Self-hosted headless Chrome bypass. Slow (~5-15s) but no quota.
 
-    data = r.json()
-    if data.get("status") != "ok":
-        log.warning("flaresolverr error: %s", data.get("message"))
-        # Still return a synthetic response so the caller sees a non-200 and
-        # falls through (in our case the chain is already exhausted).
+    Lifecycle: container is started lazily on each call and stopped
+    immediately after the request completes. We're called at most once
+    per hour (when paid providers fail), so keeping Chrome warm
+    in-between would just waste ~280 MB RAM. See _flaresolverr_lifecycle.
+    """
+    from collectors import _flaresolverr_lifecycle as fs
+
+    if not await fs.ensure_started():
+        return None  # cold-start failed or docker socket missing
+
+    try:
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,
+        }
+        try:
+            r = await client.post(FLARESOLVERR_URL, json=payload, timeout=90)
+        except httpx.ConnectError:
+            return None  # raced container shutdown; treat as unavailable
+        r.raise_for_status()
+
+        data = r.json()
+        if data.get("status") != "ok":
+            log.warning("flaresolverr error: %s", data.get("message"))
+            return httpx.Response(
+                status_code=502,
+                text=data.get("message", ""),
+                request=httpx.Request("GET", url),
+            )
+        sol = data["solution"]
         return httpx.Response(
-            status_code=502,
-            text=data.get("message", ""),
+            status_code=sol.get("status", 200),
+            text=sol.get("response", ""),
             request=httpx.Request("GET", url),
         )
-    sol = data["solution"]
-    return httpx.Response(
-        status_code=sol.get("status", 200),
-        text=sol.get("response", ""),
-        request=httpx.Request("GET", url),
-    )
+    finally:
+        # Always stop the container, even if the request errored — we
+        # don't want a leaked Chrome eating RAM until the next attempt.
+        fs.stop_in_background()
 
 
 PROVIDERS: list[tuple[str, ProviderFn]] = [
