@@ -62,6 +62,7 @@ TG_CHANNELS = [
     "ambery_longrent_telaviv",    # Долгосрочная аренда ТА ✅
     "jeremy_public",              # Agent Jeremy — Тель-Авив ✅
     "jeremy_public_ramat_gan",    # Agent Jeremy — Рамат-Ган ✅
+    "isra_home_arenda",           # Аренда Israel
     # ── Removed (dead / wrong) ────────────────────────────────────────────────
     # "BROOTTO"           — переименован в канал про работу (последнее сообщение 2023)
     # "fishyTLV"          — заброшен (последнее сообщение 2022)
