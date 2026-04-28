@@ -175,8 +175,11 @@ async def main():
 
     await monitor.start(on_listing)
 
-    # 3. Scheduler (needs on_listing for Yad2 polling)
-    scheduler = Scheduler(db, on_listing=on_listing)
+    # 3. Scheduler (needs on_listing for Yad2 polling). It also gets a
+    # reference to the monitor so the healthchecks.io ping job can stop
+    # pinging if Telethon goes silent — that's our watchdog for the silent
+    # disconnect bug observed Apr 27.
+    scheduler = Scheduler(db, on_listing=on_listing, telegram_monitor=monitor)
     scheduler.start()
 
     # Backfill: load recent history from all sources in background

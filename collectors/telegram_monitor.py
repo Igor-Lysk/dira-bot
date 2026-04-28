@@ -10,8 +10,9 @@ Uses the session string from telegram-mcp.
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Optional, Tuple
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -49,11 +50,23 @@ class TelegramMonitor(BaseCollector):
 
     source_name = "telegram"
 
+    # If no real-time event arrives in this many seconds AND we're past the
+    # startup grace window, the Telethon update loop is presumed dead — see
+    # is_healthy(). 8h covers normal overnight quiet periods on rental
+    # channels; 24h is too lenient (we lost ~36h on Apr 27 before noticing).
+    HEALTH_MAX_IDLE_SEC = 8 * 3600
+
     def __init__(self):
         self._client: TelegramClient | None = None
         self._on_listing: Callable[[dict], Awaitable[None]] | None = None
         self._channel_ids: dict[int, str] = {}   # peer_id → username
         self._entities: dict[str, object] = {}   # username → entity
+        # Liveness signals consumed by is_healthy() — used by the
+        # healthchecks.io ping job in scheduler.py to detect silent
+        # Telethon disconnects.
+        self._run_task: Optional[asyncio.Task] = None
+        self._started_at: float = 0.0  # monotonic seconds at start()
+        self._last_event_at: float = 0.0  # monotonic seconds of last live event
 
     async def start(self, on_listing: Callable[[dict], Awaitable[None]]):
         """Start monitoring. Calls on_listing(raw_dict) for each new post.
@@ -62,6 +75,8 @@ class TelegramMonitor(BaseCollector):
             on_listing: async callback receiving a raw listing dict.
         """
         self._on_listing = on_listing
+        self._started_at = time.monotonic()
+        self._last_event_at = self._started_at  # avoid false-positive at boot
 
         self._client = TelegramClient(
             StringSession(config.TG_SESSION),
@@ -117,13 +132,17 @@ class TelegramMonitor(BaseCollector):
 
         # Keep Telethon's update-receiving loop alive in the background.
         # Without this task, incoming channel updates may never fire handlers.
-        asyncio.create_task(self._client.run_until_disconnected())
+        # We retain a reference so is_healthy() can check whether it died.
+        self._run_task = asyncio.create_task(self._client.run_until_disconnected())
 
         unique_channels = len(set(self._channel_ids.values()))
         log.info("Listening for new messages in %d channels...", unique_channels)
 
     async def _handle_message(self, event):
         """Process a new message from a monitored channel."""
+        # Bump the liveness timestamp on EVERY event, even if it doesn't pass
+        # the listing filter — getting any update at all proves the loop runs.
+        self._last_event_at = time.monotonic()
         text = event.message.text or ""
         log.debug("TG event: chat_id=%s len=%d", event.chat_id, len(text))
         if not _looks_like_listing(text):
@@ -202,3 +221,26 @@ class TelegramMonitor(BaseCollector):
 
     def is_running(self) -> bool:
         return self._client is not None and self._client.is_connected()
+
+    def is_healthy(self) -> Tuple[bool, str]:
+        """Liveness probe used by the healthchecks.io ping job.
+
+        Returns (ok, reason). When ok is False the scheduler skips the
+        outbound ping → healthchecks.io fires its Telegram alert after the
+        configured grace period. This catches the silent-disconnect failure
+        mode where Telethon's update loop dies without raising and the
+        container looks healthy from the outside.
+        """
+        if self._client is None or self._run_task is None:
+            return True, "not yet started"  # don't trip during boot
+        if not self._client.is_connected():
+            return False, "telethon client disconnected"
+        if self._run_task.done():
+            # Task ended on its own — usually means the connection dropped
+            # and Telethon's run_until_disconnected returned.
+            exc = self._run_task.exception() if self._run_task.cancelled() is False else None
+            return False, f"telethon update task ended ({exc!r})"
+        idle = time.monotonic() - self._last_event_at
+        if idle > self.HEALTH_MAX_IDLE_SEC:
+            return False, f"no telethon events in {idle/3600:.1f}h"
+        return True, "ok"

@@ -23,6 +23,7 @@
 
 - [x] **Отправлять сообщение в Telegram-чат, когда бот перестаёт работать** (health-check / dead-man switch)
   **Решение:** healthchecks.io — бот пингует каждые 10 мин, при тишине > 30 мин → один алерт от `@healthchecks_io_bot` в Telegram (личка). URL в `.env` как `HEALTHCHECK_URL`. Задеплоено 23.04.
+  **Обновление 28.04:** ping-задача теперь проверяет `TelegramMonitor.is_healthy()` перед пингом и **прекращает пинговать**, если Telethon тихо отвалился (handler-task умер / disconnected / нет real-time событий >8 ч). Это закрывает баг 27.04, когда контейнер был «Up 3 days», а Telegram реалтайм не работал ~36 ч.
 
 - [ ] **Madlan job отключён**
   Прокси (ScraperAPI/Scrape.do/ScrapingBee) проходят anti-bot, но HTML содержит только `reduxInitialState` с `loading: true, data: null` — листинги грузятся через GraphQL XHR уже после рендера. Проверено 25.04: FlareSolverr тоже не помогает (отдаёт 12 KB challenge-страницы за 7.6 сек, не ждёт SPA-гидрации). Реальные пути: либо headless Playwright с `wait_for_load_state('networkidle')` в отдельном контейнере, либо реверс GraphQL endpoint Madlan, либо отказаться от Madlan совсем (его инвентарь сильно пересекается с Yad2).

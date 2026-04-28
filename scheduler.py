@@ -24,9 +24,17 @@ log = logging.getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, db: Database, on_listing: Callable[[dict], Awaitable[None]] = None):
+    def __init__(
+        self,
+        db: Database,
+        on_listing: Callable[[dict], Awaitable[None]] = None,
+        telegram_monitor=None,
+    ):
         self._db = db
         self._on_listing = on_listing
+        # Optional reference used by _healthcheck_ping to gate the outbound
+        # ping on Telegram liveness — see is_healthy() in telegram_monitor.
+        self._telegram_monitor = telegram_monitor
         self._sched = AsyncIOScheduler(timezone=config.TIMEZONE)
 
     def start(self):
@@ -263,6 +271,18 @@ class Scheduler:
             log.exception("Preference learning error: %s", e)
 
     async def _healthcheck_ping(self):
+        # Gate the ping on Telegram liveness. If the Telethon update loop
+        # silently died, we WANT the ping to stop so healthchecks.io fires
+        # its Telegram alert (the whole point of the watchdog).
+        if self._telegram_monitor is not None:
+            ok, reason = self._telegram_monitor.is_healthy()
+            if not ok:
+                log.warning(
+                    "skipping healthcheck ping — telegram unhealthy: %s",
+                    reason,
+                )
+                return
+
         import httpx
         try:
             async with httpx.AsyncClient(timeout=10) as client:
