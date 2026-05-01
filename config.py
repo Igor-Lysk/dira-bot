@@ -35,10 +35,9 @@ HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
 HEALTHCHECK_INTERVAL_MIN = 10
 
 # ── Search criteria ───────────────────────────────────────────────────────────
-MIN_ROOMS = 2.0          # 2+ rooms (Israeli count)
-MAX_PRICE = 7000          # NIS/month
-MOVE_IN = "начало мая 2026"
-MIN_LEASE_MONTHS = 6
+MIN_ROOMS = 2.5          # Israeli count includes living room → 3-room equiv
+MAX_PRICE = 8000          # NIS/month
+MIN_LEASE_MONTHS = 6      # only used to filter short-term sublets
 
 SEND_THRESHOLD = 7        # score >= 7 → instant alert
 MAYBE_THRESHOLD = 5       # score 5-6 → alert with "?"

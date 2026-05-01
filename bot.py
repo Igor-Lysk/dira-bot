@@ -80,25 +80,6 @@ def format_alert(listing: dict, analysis: dict) -> str:
     else:
         mamad_s = '\u2753 \u05de\u05de"\u05d3?'
 
-    # Furnished
-    furn = analysis.get("furnished", "unknown")
-    furn_map = {
-        "full": "\U0001f6cb Full",
-        "partial": "\U0001fa91 Partial",
-        "empty": "\U0001f4e6 Empty",
-        "unknown": "\u2753",
-    }
-    furn_s = furn_map.get(furn, "\u2753")
-
-    # Station
-    station = analysis.get("near_station")
-    if station is True:
-        station_s = "\U0001f689 Near station"
-    elif station is False:
-        station_s = "\U0001f6b6 Far from station"
-    else:
-        station_s = "\u2753 Station?"
-
     parts = [
         f"{icon} *[{score}/10] {rec}* \u2014 {source_label}",
         "",
@@ -113,7 +94,7 @@ def format_alert(listing: dict, analysis: dict) -> str:
     if rooms and str(rooms) != "?":
         parts.append(f"\U0001f6cf {rooms} \u043a\u043e\u043c\u043d.")
 
-    parts += ["", mamad_s, furn_s, station_s]
+    parts += ["", mamad_s]
 
     pros = analysis.get("pros", [])
     issues = analysis.get("issues", [])
