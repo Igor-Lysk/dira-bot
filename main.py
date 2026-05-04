@@ -21,6 +21,58 @@ from analyzer import analyze_listing
 from bot import init as init_bot, send_alert, send_text
 from scheduler import Scheduler
 
+# ── Rooms pre-filter ─────────────────────────────────────────────────────────
+#
+# Claude occasionally ignores the "rooms < 2.5 → SKIP score 0" hard rule in
+# the prompt, especially when all other criteria (mamad, price, city) look
+# great. This deterministic regex filter runs BEFORE Claude so a listing with
+# a clearly stated room count below 2.5 never reaches the LLM at all.
+#
+# It only fires when we can extract an explicit room count with confidence.
+# Ambiguous listings (no room count mentioned) pass through to Claude as usual.
+
+_ROOMS_HEBREW_RE = re.compile(
+    r"""
+    (?:
+        (\d+(?:[.,]\d)?)\s*חד(?:רים|ר\b|')   # "2 חדרים" / "2 חד'"
+    )
+    |
+    (?:
+        חד(?:רים|ר\b|')                        # label before number:
+        [^0-9]{0,8}                             # "חדרים:** 2" / "חדרים: 2"
+        (\d+(?:[.,]\d)?)
+    )
+    """,
+    re.VERBOSE | re.UNICODE,
+)
+_ROOMS_RUSSIAN_RE = re.compile(
+    r'(\d+(?:[.,]\d)?)\s*[-–]?\s*комнат',  # "2 комнаты", "3-комнатная"
+    re.IGNORECASE | re.UNICODE,
+)
+_ROOMS_ENGLISH_RE = re.compile(
+    r'(\d+(?:[.,]\d)?)\s*(?:bed\s*rooms?|br\b)',
+    re.IGNORECASE,
+)
+
+
+def _extract_rooms(text: str) -> float | None:
+    """Return the minimum explicitly-stated room count, or None if uncertain.
+
+    Taking the minimum is the conservative choice: if a listing says both
+    '2 חדרים' and '3 חדרים' (unusual but possible in copy-paste posts),
+    we'd rather investigate the lower figure.
+    """
+    rooms: list[float] = []
+    for pattern in (_ROOMS_HEBREW_RE, _ROOMS_RUSSIAN_RE, _ROOMS_ENGLISH_RE):
+        for m in pattern.finditer(text):
+            for g in m.groups():
+                if g is not None:
+                    try:
+                        rooms.append(float(g.replace(",", ".")))
+                    except ValueError:
+                        pass
+    return min(rooms) if rooms else None
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -110,6 +162,27 @@ async def process_new_listing(raw: dict, db: Database):
 
     if not is_new:
         log.debug("Duplicate listing %s, skipping", listing_id)
+        return
+
+    # Pre-filter: reject listings with a clearly sub-minimum room count.
+    # This runs BEFORE Claude so prompt-level rules can't be rationalized away.
+    detected_rooms = _extract_rooms(text)
+    if detected_rooms is not None and detected_rooms < config.MIN_ROOMS:
+        log.info(
+            "Rooms pre-filter: %.4g rooms < %.4g minimum — SKIP (listing %s)",
+            detected_rooms, config.MIN_ROOMS, listing_id[:12],
+        )
+        await db.save_analysis(listing_id, {
+            "score": 0,
+            "recommendation": "SKIP",
+            "summary": f"Авто-фильтр: {detected_rooms:g} комн. < {config.MIN_ROOMS:g} (минимум)",
+            "pros": [],
+            "issues": [f"Только {detected_rooms:g} комнат — ниже минимума {config.MIN_ROOMS:g}"],
+            "rooms_found": detected_rooms,
+            "has_mamad": None,
+            "price_found": None,
+            "location": "",
+        })
         return
 
     log.info("New listing %s from %s — analyzing...", listing_id, source)
