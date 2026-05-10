@@ -1,133 +1,241 @@
-# CLAUDE.md
+# Dira Bot — Project Archive
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## What this is
-
-Dira Bot — autonomous apartment-hunting bot for Tel Aviv. Monitors Telegram channels, Yad2, Madlan, and Facebook for rental listings, analyzes each with Claude (Haiku), and sends Telegram alerts with 👍/👎 feedback buttons. Deployed 24/7 on a Berlin VPS.
-
-**Search criteria (hardcoded in `analyzer.py` prompt):** Tel Aviv area, ≤7,000 ₪/month, 2+ rooms, ממ"ד required, furnished, near train station, move-in May 2026, 6+ months.
+**Статус:** ✅ Завершён. Квартира найдена в мае 2026.
+Бот проработал ~33 дня (7 апреля — 10 мая 2026). Сервер остановлен, БД сохранена локально в `data/dira.db`.
 
 ---
 
-## Running & deployment
+## Что это такое
 
-```bash
-# Local run (uses .env in project root)
-python main.py
-
-# Build and start Docker
-docker-compose up --build
-
-# Deploy to VPS (git push triggers post-receive hook → docker-compose up)
-git push berlin master
-
-# View live logs on server
-ssh -i ~/.ssh/REDACTED igor@REDACTED \
-  "DOCKER_HOST=unix:///run/user/1003/docker.sock docker logs dira-bot -f"
-
-# Check container status
-ssh -i ~/.ssh/REDACTED igor@REDACTED \
-  "DOCKER_HOST=unix:///run/user/1003/docker.sock docker ps"
-```
-
-**Server `.env`** lives at `~/workspace/dira-bot/.env` on the VPS — it is not in git. Add new secrets there manually via SSH **and** to the local `.env`.
+Автономный бот для поиска квартиры в аренду в районе Тель-Авива.
+Мониторит Telegram-каналы и Yad2, анализирует каждое объявление через Claude Haiku и отправляет алерты в Telegram с кнопками обратной связи 👍/👎.
 
 ---
 
-## Architecture
+## Итоговая статистика (из data/dira.db)
 
-Everything runs in a **single asyncio event loop**. No threads, no subprocesses.
+| Метрика | Значение |
+|---------|----------|
+| Период работы | 7 апр — 10 мая 2026 (33 дня) |
+| Всего объявлений | 748 |
+| Источники | Telegram: 682 / Yad2: 66 |
+| Проанализировано | 748 |
+| SEND (score ≥ 7) | 132 |
+| MAYBE (score 5–6) | 88 |
+| SKIP | 528 |
+| Обратная связь | 7 (👍 3 / 👎 1 / 🗑 3) |
+| Макс. найденный score | 9/10 |
 
-```
-Telegram channels (real-time)  ─┐
-Yad2 via ScraperAPI (30 min)   ─┤──► process_new_listing() ──► Claude ──► send_alert()
-Madlan via ScraperAPI (2h)     ─┤         (main.py)           analyzer.py    bot.py
-Apify Yad2/Facebook (2h/12h)  ─┘
-                                          │
-                                          ▼
-                                     SQLite DB
-                                    (database.py)
-                                          │
-                                 APScheduler (scheduler.py)
-                                  ├── daily digest 20:00
-                                  └── learn preferences 6h
-```
-
-### Processing pipeline (`process_new_listing` in `main.py`)
-
-Every listing from every source goes through this sequence:
-
-1. **Sublet filter** — regex matches "саблет/sublet/שותפ" etc., but cancels on negation like "не саблет" within 8 chars (`_SUBLET_RE` / `_NOT_SUBLET_RE`)
-2. **Cross-source dedup** — `db.find_similar(price±300, rooms, city)` prevents the same apartment from Yad2 + Telegram + Facebook firing 3 alerts. Only fires when all 3 fields are non-null
-3. **ID + fingerprint dedup** — SHA-256 of URL (preferred) or text; text fingerprint strips whitespace/punctuation
-4. **Claude analysis** — score 0-10, SEND/MAYBE/SKIP recommendation, structured JSON
-5. **Alert** — SEND (score ≥7) or MAYBE (score 5-6) → `send_alert()`
-
-### Collectors
-
-All extend `BaseCollector` (`collectors/base.py`). The scheduler wires them up:
-
-| Collector | File | Trigger | Notes |
-|-----------|------|---------|-------|
-| `TelegramMonitor` | `telegram_monitor.py` | real-time events | Uses Telethon StringSession; `backfill(days=7)` runs once on start |
-| `Yad2PageCollector` | `yad2_page.py` | every 30 min | Parses `__NEXT_DATA__` JSON from page; routes via ScraperAPI when `SCRAPERAPI_KEY` set |
-| `MadlanCollector` | `madlan.py` | every 2h | Same `__NEXT_DATA__` approach; routes via ScraperAPI |
-| `ApifyYad2Collector` | `apify_yad2.py` | every 2h | Only if `APIFY_TOKEN` set |
-| `ApifyFacebookCollector` | `apify_facebook.py` | every 12h | Only if `APIFY_TOKEN` set; **paid-per-event** (~$3/1000 results) |
-
-**Scheduler selection logic** (`scheduler.py`):
-- `APIFY_TOKEN` set → Apify Yad2 + Apify Facebook
-- `SCRAPERAPI_KEY` set → direct Yad2 + Madlan (both wrapped through ScraperAPI)
-- Both set → all four run; DB dedup prevents duplicate alerts
-- Neither → direct Yad2 only (works locally, 403 on server)
-
-### Facebook backfill guard
-
-`run_backfill()` in `main.py` checks `db.get_stats()["by_source"]["facebook"] > 0` before running the Apify Facebook backfill. This prevents re-burning Apify credits on every restart. The Facebook actor is **paid-per-event** — the initial backfill of 100 posts × 15 groups burned ~$4.75 on first deploy (April 8, 2026).
+БД содержит полный `raw_text` каждого объявления — можно делать ретроспективный анализ.
 
 ---
 
-## Key implementation details
+## Критерии поиска (финальные, зафиксированы в analyzer.py)
 
-### Hebrew JSON gotcha
+- **Города:** Тель-Авив, Рамат-Ган, Гиватаим, Бней-Брак (основные); Бат-Ям, Холон (−1 балл)
+- **Комнаты:** ≥ 2.5 (израильский счёт — гостиная считается комнатой)
+- **Цена:** до 8,000 ₪/мес (идеально до 7,500 — ещё −1 балл)
+- **Мамад (ממ"ד):** ОБЯЗАТЕЛЕН — укреплённая комната внутри квартиры. Миклат/общее убежище — НЕ считается
+- **Мебель, транспорт, дата въезда:** не учитываются
 
-`ממ"ד` (mamad) contains a literal double-quote (Hebrew gershayim, U+0022) that breaks JSON parsing. `_sanitize_hebrew_json()` in `analyzer.py` replaces it with U+05F4 before parsing. This runs as a fallback in `_try_parse()`.
+**Жёсткие SKIP (применяются до score, перевешивают всё):**
+- Город не из списка → SKIP score 0
+- Продажа (не аренда) → SKIP score 0
+- Субаренда / саблет / комната с соседями → SKIP score 0
+- Краткосрочная аренда < 6 мес → SKIP score 0
+- Цена > 8,000 ₪ → SKIP score 0
+- rooms < 2.5 → SKIP score 0
+- Только миклат, нет мамада → SKIP score 0
+- Мамад вообще не упомянут → score ≤ 3 → SKIP
 
-### ScraperAPI integration
+**Пороги алертов:** SEND ≥ 7, MAYBE 5–6
 
-`_scraper_url(url)` in `yad2_page.py` and `madlan.py` wraps any URL:
+---
+
+## Архитектура
+
+Всё работает в одном `asyncio` event loop. Никаких потоков, никаких subprocess.
+
+```
+Telegram-каналы (real-time)  ─┐
+Yad2 через ScraperAPI (1h)   ─┤──► process_new_listing() ──► Claude ──► send_alert()
+Apify Yad2/Facebook (2h/12h) ─┘         (main.py)           analyzer.py    bot.py
+                                               │
+                                               ▼
+                                          SQLite DB
+                                         (database.py)
+                                               │
+                                      APScheduler (scheduler.py)
+                                       ├── daily digest 20:00
+                                       └── learn preferences каждые 6h
+```
+
+### Пайплайн обработки (`process_new_listing` в main.py)
+
+1. **Фильтр саблетов** — regex по "саблет/sublet/שותפ", с отменой при отрицании "не саблет"
+2. **Фильтр комнат (pre-Claude)** — regex извлекает явное число комнат из текста; если < 2.5 — SKIP без вызова Claude вообще. Паттерны: иврит (`חדרים`), русский (`комнат`), английский (`bedrooms`)
+3. **Cross-source dedup** — `db.find_similar(price±300, rooms, city)` — одна квартира на Yad2 + Telegram не даёт два алерта
+4. **ID + fingerprint dedup** — SHA-256 от URL или текста
+5. **Claude analysis** — score 0–10, SEND/MAYBE/SKIP, JSON
+6. **Alert** — SEND или MAYBE → `send_alert()`
+
+### Коллекторы
+
+| Коллектор | Файл | Интервал | Примечание |
+|-----------|------|----------|------------|
+| `TelegramMonitor` | `telegram_monitor.py` | real-time | Telethon StringSession; `backfill(days=7)` при старте |
+| `Yad2PageCollector` | `yad2_page.py` | каждый час | `__NEXT_DATA__` JSON; proxy chain при наличии ключей |
+| `MadlanCollector` | `madlan.py` | каждые 2h | То же; **отключён** — антибот возвращал пустые данные |
+| `ApifyYad2Collector` | `apify_yad2.py` | каждые 2h | Только при `APIFY_TOKEN` |
+| `ApifyFacebookCollector` | `apify_facebook.py` | каждые 12h | Только при `APIFY_TOKEN`; платно за событие (~$3/1000) |
+
+**Логика proxy для Yad2 (`collectors/_fetch.py`):**
+ScraperAPI → Scrape.do → ScrapingBee → FlareSolverr (lazy lifecycle: стартует по требованию, останавливается сразу после)
+
+---
+
+## Telegram-каналы, которые мониторились
+
 ```python
-f"https://api.scraperapi.com/?api_key={config.SCRAPERAPI_KEY}&url={urllib.parse.quote(url, safe='')}"
+TG_CHANNELS = [
+    "Israel_arenda",            # Аренда в Израиле (рус) — самый активный
+    "flamingorent",             # Аренда (бывает Хайфа, Claude фильтрует)
+    "snyat_kvartiruy",          # Снять квартиру (рус)
+    "aptfornew",                # Квартиры репатриантам
+    "ambery_longrent_telaviv",  # Долгосрочная аренда ТА
+    "jeremy_public",            # Agent Jeremy — Тель-Авив
+    "jeremy_public_ramat_gan",  # Agent Jeremy — Рамат-Ган
+    "isra_home_arenda",         # Аренда Israel
+]
 ```
-Timeout must be **60s** (not 20s) — ScraperAPI adds latency. Free tier: 5,000 req/month. Current usage: ~3,240/month (Yad2 30min + Madlan 5 cities 2h).
-
-### Apify cost model
-
-`apify~facebook-groups-scraper` charges **per event (post returned)**, not per request or bandwidth. At ~$3/1000 events, current settings (5 posts × 7 groups × 2 runs/day) cost ~$0.63/month. Monthly limit resets on the 1st — if exhausted, both Apify collectors return 403.
-
-### Scoring thresholds
-
-Defined in `config.py`:
-- `SEND_THRESHOLD = 7` → instant alert
-- `MAYBE_THRESHOLD = 5` → alert marked with "?"
-- Both trigger `send_alert()` (handled in `process_new_listing`)
 
 ---
 
-## Config / environment
+## Ключевые баги и фиксы (хронология)
 
-All settings flow through `config.py` which loads `.env`. Key variables:
+### 1. Rootless Docker упал и не поднялся (17–22 апреля)
+**Симптом:** Бот молчал 5 дней. `docker ps` недоступен.
+**Причина:** boltdb timeout в rootless dockerd; при перезагрузке сервера автостарт не настроен.
+**Фикс:** `systemctl --user enable docker` + пользовательский systemd unit для `dockerd`.
+**Дополнительно:** post-receive hook в git bare repo использовал неправильный socket path (`/run/user/1003/docker.sock` → `/var/run/docker/run/docker.sock`).
 
-| Variable | Purpose |
-|----------|---------|
-| `TELEGRAM_BOT_TOKEN` | aiogram bot |
-| `TELEGRAM_CHAT_ID` | where to send alerts |
-| `TELEGRAM_API_ID/HASH/SESSION_STRING` | Telethon user session |
-| `ANTHROPIC_API_KEY` | Claude API |
-| `CLAUDE_MODEL` | default `claude-haiku-4-5-20251001` |
-| `APIFY_TOKEN` | enables Apify collectors |
-| `SCRAPERAPI_KEY` | enables ScraperAPI proxy for Yad2/Madlan |
+### 2. APScheduler misfire — задачи не запускались при старте
+**Симптом:** Yad2/Madlan не сканировались первый час после деплоя.
+**Причина:** `next_run_time=datetime.now()` + `misfire_grace_time` по умолчанию (1h) — задача считалась просроченной.
+**Фикс:** `misfire_grace_time=None` (никогда не считать просроченной).
 
-Adding a new Telegram channel: add username (without `@`) to `TG_CHANNELS` in `config.py`.
-Adding a Facebook group: add URL to `FB_GROUPS` (affects Apify cost — each group adds ~$0.09/month at current settings).
+### 3. FlareSolverr OOM — Chrome падал
+**Симптом:** FlareSolverr стартовал но `fetch` не возвращал данные.
+**Причина:** `mem_limit: 600m` в docker-compose — Chrome OOM-killился.
+**Фикс:** `mem_limit: 900m`.
+
+### 4. Telethon silent disconnect (27 апреля, ~36h молчания)
+**Симптом:** Бот живой (healthcheck.io пингует), но алертов нет. Telegram-каналы не мониторятся.
+**Причина:** `run_until_disconnected()` таск завершился без exception и без log.
+**Фикс:** `is_healthy()` метод в `TelegramMonitor` — проверяет `client.is_connected()`, статус таска, и время последнего события (idle > 8h → нездоров). `scheduler.py` пропускает ping к healthchecks.io если монитор нездоров → через grace period приходит Telegram-алерт.
+
+### 5. Madlan — антибот блокировал данные
+**Симптом:** ScraperAPI/Scrape.do возвращали HTML без `__NEXT_DATA__` (CSR, данные грузятся XHR).
+**Попытки:** GraphQL reverse engineering (`/api2`, `/api3`) — успешно нашли endpoint, но даже с правильным запросом данные пустые без сессионных кук.
+**Решение:** Madlan job отключён, не тратим прокси-квоту на заблокированные запросы.
+
+### 6. Объявление с 2 комнатами проходило как SEND (два инцидента)
+**Листинг:** `https://t.me/jeremy_public/741` — "2 חדרים" + мамад, scored 7/10 SEND.
+**Первый инцидент:** Prompt содержал "score ≤ 3 → SKIP" как мягкое правило. Claude его рационализировал при хороших других критериях.
+**Первый фикс:** Реструктурировали prompt — явная секция "ЖЁСТКИЕ SKIP (применяются ДО score)", `rooms < 2.5 → SKIP score 0`.
+**Второй инцидент:** Тот же листинг снова прошёл после фикса промпта. Claude всё равно rationalized.
+**Финальный фикс:** Детерминированный regex в `process_new_listing()` — запускается ДО вызова `analyze_listing()`. Если находит явное число комнат < 2.5 → сразу SKIP, Claude не вызывается вообще. Паттерны: `חד(?:רים|ר\b)`, `комнат`, `bedrooms`.
+
+### 7. Hebrew JSON gershayim ломал парсинг
+**Причина:** `ממ"ד` содержит U+0022 (обычный double-quote), что ломает JSON внутри JSON-строки.
+**Фикс:** `_sanitize_hebrew_json()` в `analyzer.py` заменяет ASCII `"` в известных ивритских аббревиатурах (ממ"ד, צה"ל, ת"א, ר"ג...) на U+05F4 (Hebrew punctuation gershayim) перед парсингом.
+
+---
+
+## Внешние сервисы и стоимость
+
+| Сервис | Использование | Стоимость |
+|--------|---------------|-----------|
+| Anthropic API (Haiku) | ~748 анализов + reanalyze | ~$1–2 |
+| Apify (Facebook scraper) | Backfill 100 posts × 15 групп — разовый | ~$4.75 |
+| Apify (Yad2) | Ежедневно пока был в квоте | free tier |
+| ScraperAPI | ~3,240 req/мес (Yad2 1h + Madlan) | free tier (5k/мес) |
+| Scrape.do | Основной прокси для Yad2 | free tier |
+| ScrapingBee | Fallback | free tier |
+| FlareSolverr | Last-resort для Yad2, lazy lifecycle | self-hosted, бесплатно |
+| Healthchecks.io | Dead-man switch, ping каждые 10 мин | free tier |
+| VPS Berlin (REDACTED) | Shared с REDACTED | оплачивается отдельно |
+
+---
+
+## Переменные окружения (были в .env на сервере, в git не хранились)
+
+```
+TELEGRAM_BOT_TOKEN=        # aiogram бот
+TELEGRAM_CHAT_ID=          # куда слать алерты
+TELEGRAM_API_ID=           # Telethon user account
+TELEGRAM_API_HASH=
+TELEGRAM_SESSION_STRING=   # Telethon StringSession
+ANTHROPIC_API_KEY=
+CLAUDE_MODEL=claude-haiku-4-5-20251001
+APIFY_TOKEN=
+SCRAPERAPI_KEY=
+SCRAPEDO_KEY=
+SCRAPINGBEE_KEY=
+HEALTHCHECK_URL=https://hc-ping.com/...
+DB_PATH=/app/data/dira.db
+```
+
+---
+
+## Инфраструктура сервера
+
+- **VPS:** `REDACTED`, user `igor`, SSH key `~/.ssh/REDACTED`
+- **Docker:** rootless, socket `/var/run/docker/run/docker.sock`
+- **Деплой:** git bare repo `~/workspace/dira-bot.git` + post-receive hook → `docker compose up --build -d`
+- **Автостарт:** `systemctl --user enable docker` + user linger (`loginctl enable-linger igor`)
+
+**Статус после завершения:** всё остановлено и удалено. Остался `REDACTED` (другой проект).
+
+---
+
+## Структура проекта
+
+```
+dira-bot/
+├── main.py              # Entry point, asyncio loop, process_new_listing pipeline
+├── analyzer.py          # Claude Haiku integration, prompt templates
+├── bot.py               # aiogram bot: alert formatting, feedback buttons, commands
+├── config.py            # Env vars, thresholds, channel lists
+├── database.py          # SQLite via aiosqlite: listings, analyses, feedback, prefs
+├── scheduler.py         # APScheduler: Yad2 poll, digest, preferences, healthcheck
+├── collectors/
+│   ├── base.py                      # BaseCollector ABC
+│   ├── telegram_monitor.py          # Telethon real-time + backfill
+│   ├── yad2_page.py                 # Yad2 __NEXT_DATA__ scraper
+│   ├── madlan.py                    # Madlan scraper (отключён)
+│   ├── apify_yad2.py                # Apify Yad2 actor
+│   ├── apify_facebook.py            # Apify Facebook groups actor
+│   ├── _fetch.py                    # Proxy chain: ScraperAPI→Scrape.do→ScrapingBee→FlareSolverr
+│   └── _flaresolverr_lifecycle.py   # Lazy start/stop FlareSolverr container
+├── scripts/
+│   └── reanalyze.py     # Ретроактивный перебор старых SKIPов с новыми критериями
+├── data/
+│   └── dira.db          # SQLite DB (скачана с сервера 10 мая 2026)
+├── docker-compose.yml
+├── Dockerfile
+└── requirements.txt
+```
+
+---
+
+## Советы по повторному использованию
+
+Если понадобится адаптировать для другого города / другой страны:
+
+1. **Критерии** — только в `ANALYZE_TEMPLATE` в `analyzer.py`. Менять можно без правки кода.
+2. **Pre-filter комнат** — `_extract_rooms()` в `main.py`: добавь паттерны для нового языка если нужно.
+3. **Telegram-каналы** — `TG_CHANNELS` в `config.py`. Просто список username без `@`.
+4. **Yad2 города** — `YAD2_CITIES` в `config.py`: словарь `название → city_id`.
+5. **Madlan** — потенциально работоспособен через сессионные куки браузера (не реализовано).
+6. **Reanalyze** — `scripts/reanalyze.py` позволяет переиграть прошлые SKIP с новыми критериями без повторного сбора.
