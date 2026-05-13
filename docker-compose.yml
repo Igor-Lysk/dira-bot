@@ -7,9 +7,10 @@ services:
     volumes:
       - ./data:/app/data    # persist SQLite database
       # Read/write access to host docker socket so the bot can lazy-start /
-      # stop the flaresolverr container on demand. Path is the rootless
-      # docker socket on the Berlin VPS.
-      - /var/run/docker/run/docker.sock:/var/run/docker.sock
+      # stop the flaresolverr container on demand. Adjust this path to your
+      # host: standard Docker → /var/run/docker.sock; rootless Docker →
+      # /run/user/$UID/docker.sock or ~/.docker/run/docker.sock.
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     logging:
       driver: json-file
       options:
@@ -32,9 +33,4 @@ services:
       LOG_HTML: "false"
       CAPTCHA_SOLVER: none
       TZ: Asia/Jerusalem
-      BROWSER_TIMEOUT: "40000"
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
+      BROWSER_TIMEOUT:

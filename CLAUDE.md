@@ -117,7 +117,7 @@ TG_CHANNELS = [
 **Симптом:** Бот молчал 5 дней. `docker ps` недоступен.
 **Причина:** boltdb timeout в rootless dockerd; при перезагрузке сервера автостарт не настроен.
 **Фикс:** `systemctl --user enable docker` + пользовательский systemd unit для `dockerd`.
-**Дополнительно:** post-receive hook в git bare repo использовал неправильный socket path (`/run/user/1003/docker.sock` → `/var/run/docker/run/docker.sock`).
+**Дополнительно:** post-receive hook в git bare repo указывал на стандартный rootless socket (`/run/user/$UID/docker.sock`), но реальный путь в этом дистрибутиве был `~/.docker/run/docker.sock`. Фикс — выровнять путь.
 
 ### 2. APScheduler misfire — задачи не запускались при старте
 **Симптом:** Yad2/Madlan не сканировались первый час после деплоя.
@@ -164,7 +164,7 @@ TG_CHANNELS = [
 | ScrapingBee | Fallback | free tier |
 | FlareSolverr | Last-resort для Yad2, lazy lifecycle | self-hosted, бесплатно |
 | Healthchecks.io | Dead-man switch, ping каждые 10 мин | free tier |
-| VPS Berlin (REDACTED) | Shared с REDACTED | оплачивается отдельно |
+| VPS (Europe) | Хост для бота | self-hosted |
 
 ---
 
@@ -190,12 +190,11 @@ DB_PATH=/app/data/dira.db
 
 ## Инфраструктура сервера
 
-- **VPS:** `REDACTED`, user `igor`, SSH key `~/.ssh/REDACTED`
-- **Docker:** rootless, socket `/var/run/docker/run/docker.sock`
-- **Деплой:** git bare repo `~/workspace/dira-bot.git` + post-receive hook → `docker compose up --build -d`
-- **Автостарт:** `systemctl --user enable docker` + user linger (`loginctl enable-linger igor`)
+- **VPS:** небольшой европейский хостинг (~3.7 ГБ RAM), Linux + rootless Docker.
+- **Деплой:** git bare repo с post-receive hook → `docker compose up --build -d` на пуш в `main`.
+- **Автостарт:** `systemctl --user enable docker` + user linger, чтобы пользовательский docker daemon переживал ребуты сервера.
 
-**Статус после завершения:** всё остановлено и удалено. Остался `REDACTED` (другой проект).
+**Статус после завершения:** всё остановлено и удалено.
 
 ---
 
@@ -238,4 +237,4 @@ dira-bot/
 3. **Telegram-каналы** — `TG_CHANNELS` в `config.py`. Просто список username без `@`.
 4. **Yad2 города** — `YAD2_CITIES` в `config.py`: словарь `название → city_id`.
 5. **Madlan** — потенциально работоспособен через сессионные куки браузера (не реализовано).
-6. **Reanalyze** — `scripts/reanalyze.py` позволяет переиграть прошлые SKIP с новыми критериями без повторного сбора.
+6. **Reanalyze** — `scripts/reanalyze.py` позволяет переиграть прошлые SKIP с новыми критериями 
