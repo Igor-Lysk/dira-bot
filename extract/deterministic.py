@@ -430,7 +430,8 @@ def extract(text: str) -> Facts:
     f.district = rules.extract_district(text)
     f.city = _city(text) or (rules.get_city(f.district) if f.district else None)
     f.deal_type = _deal_type(text)
-    f.phones = rules.extract_phones(text) or []
+    # extract_phones возвращает множество — приводим к списку, иначе не сериализуется
+    f.phones = sorted(rules.extract_phones(text) or [])
     f.fingerprint = rules.text_fingerprint(text)
 
     if "furnished" in tags:

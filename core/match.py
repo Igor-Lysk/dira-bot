@@ -73,9 +73,20 @@ def match(facts: dict, profile: dict) -> MatchResult:
 
     cities = profile.get("cities") or []
     city = facts.get("city")
-    if cities and city is not None and city not in cities:
-        return MatchResult(False, rejected_by=f"город {city} не в списке")
-    # город неизвестен — не отбрасываем: это «нет данных», а не «не тот город»
+    if cities:
+        if city is None:
+            # Город — единственный признак, где «нет данных» по умолчанию НЕ
+            # проходит. Причина из живого прогона: объявления из хайфского
+            # канала не называют город (читателю он очевиден) и проходили
+            # тель-авивский фильтр как «неизвестно», занимая верх выдачи.
+            # Подсказку из метаданных канала подставляет вызывающий код
+            # (core.sources.region_of), сюда факты приходят уже с ней.
+            if profile.get("allow_unknown_city", 0):
+                pass
+            else:
+                return MatchResult(False, rejected_by="город не опознан")
+        elif city not in cities:
+            return MatchResult(False, rejected_by=f"город {city} не в списке")
 
     price = facts.get("price")
     price_max = profile.get("price_max")

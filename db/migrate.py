@@ -44,7 +44,14 @@ def migrate(db_path: str, verbose: bool = True) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(db_path)) or ".", exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
+        # WAL быстрее и переживает параллельное чтение, но не работает на
+        # сетевых и смонтированных файловых системах — там SQLite отвечает
+        # "disk I/O error". На сервере это WAL, при локальной отладке на
+        # примонтированной папке — обычный журнал.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute("PRAGMA foreign_keys=ON")
         version = current_version(conn)
         applied = 0
