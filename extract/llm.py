@@ -211,7 +211,22 @@ def _clean(name: str, value):
     if name in _ENUMS:
         v = str(value).strip().lower()
         return v if v in _ENUMS[name] else None
-    return str(value).strip() or None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    # Названия мест не бывают голыми числами. Живой прогон дал район «2» —
+    # модель разложила «צוריאל 2» на улицу и «район», и в карточке получилось
+    # «צוריאל, 2, Ramat Gan».
+    if name in ("district", "city", "street") and text.isdigit():
+        return None
+    if name in ("district", "city") and len(text) < 3:
+        return None
+    # «צוריאל, 2» — модель иногда отделяет номер дома запятой, и в карточке это
+    # читается как два разных поля адреса.
+    if name == "street":
+        text = re.sub(r",\s*(\d+[א-ת]?)$", r" \1", text)
+    return text
 
 
 def merge(facts: Facts, payload: dict) -> Facts:
