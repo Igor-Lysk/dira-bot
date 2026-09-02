@@ -15,6 +15,7 @@
 import asyncio
 import logging
 import sys
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -31,7 +32,10 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)])
-for noisy in ("telethon", "aiogram", "httpx", "apscheduler", "anthropic"):
+# httpx2 — так называет свой логгер клиент anthropic; без него в логи
+# сыплется по строке на каждый вызов модели.
+for noisy in ("telethon", "aiogram", "httpx", "httpx2", "httpcore",
+              "apscheduler", "anthropic"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 log = logging.getLogger("dira")
 
@@ -117,16 +121,21 @@ async def main():
         except Exception as e:                        # noqa: BLE001
             log.warning("healthcheck не отправился: %s", e)
 
-    # misfire_grace_time=None — задача никогда не считается просроченной.
-    # В v1 задачи со стартом «сейчас» молча пропускались первый час.
-    for func, minutes, job_id in (
-        (job_enrich, settings.ENRICH_INTERVAL_MIN, "enrich"),
-        (job_deliver, settings.DELIVERY_INTERVAL_MIN, "deliver"),
-        (job_retry, settings.RETRY_INTERVAL_MIN, "retry"),
-        (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck"),
+    # first_delay — через сколько секунд после старта задача выполнится впервые.
+    # Без этого интервальная задача ждёт полный период: после каждого рестарта
+    # факты десять минут лежали бы недозаполненными, а выдача стояла бы пять.
+    # misfire_grace_time=None — задача никогда не считается просроченной; в v1
+    # старт «сейчас» с грейсом по умолчанию молча пропускал первый час.
+    now = datetime.now()
+    for func, minutes, job_id, first_delay in (
+        (job_enrich, settings.ENRICH_INTERVAL_MIN, "enrich", 90),
+        (job_deliver, settings.DELIVERY_INTERVAL_MIN, "deliver", 150),
+        (job_retry, settings.RETRY_INTERVAL_MIN, "retry", 600),
+        (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck", 30),
     ):
         scheduler.add_job(func, IntervalTrigger(minutes=minutes), id=job_id,
-                          replace_existing=True, misfire_grace_time=None)
+                          replace_existing=True, misfire_grace_time=None,
+                          next_run_time=now + timedelta(seconds=first_delay))
     scheduler.start()
     log.info("планировщик запущен")
 

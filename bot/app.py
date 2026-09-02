@@ -119,11 +119,20 @@ async def _finish(target, user: dict, store: Store):
     fields = wizard.to_profile(data)
     profiles = await store.profiles_of(user["telegram_id"])
     if profiles:
-        await store.update_profile(profiles[0]["id"], **fields)
+        profile_id = profiles[0]["id"]
+        await store.update_profile(profile_id, **fields)
     else:
-        await store.create_profile(user["telegram_id"], "Основной", **fields)
+        profile_id = await store.create_profile(user["telegram_id"], "Основной", **fields)
     await store.set_user(user["telegram_id"], onboarding_step="done")
+
+    # Сопоставление идёт в момент обработки объявления, поэтому всё собранное до
+    # настройки профиля иначе осталось бы невидимым: первый /feed был бы пустым
+    # при полной базе.
+    from core.pipeline import rematch_profile
+    found = await rematch_profile(store, profile_id)
     text = ("<b>Готово, профиль сохранён</b>\n\n" + wizard.summary(data) +
+            (f"\n\nПо этим критериям уже нашлось: {found}." if found else
+             "\n\nПодходящего пока нет — пришлю, как появится.") +
             "\n\nМеняется в /settings. Что уже нашлось — /feed.")
     sender = target.answer if isinstance(target, Message) else target.message.edit_text
     await sender(text, parse_mode=ParseMode.HTML)

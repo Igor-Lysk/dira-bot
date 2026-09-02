@@ -179,6 +179,35 @@ async def match_listing(store: Store, lid: str) -> int:
     return created
 
 
+async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: int = 500) -> int:
+    """Прогнать уже собранные объявления по одному профилю.
+
+    Нужно потому, что сопоставление происходит в момент обработки объявления:
+    всё, что бот собрал до того, как человек настроил профиль, иначе осталось бы
+    невидимым. Без этого первый `/feed` после онбординга пустой, хотя в базе уже
+    сотня объявлений. Вызывается при создании и при любом изменении профиля.
+    """
+    profile = await store.get_profile(profile_id)
+    if not profile:
+        return 0
+    cur = await store._db.execute(
+        "SELECT id FROM listings WHERE collected_at >= datetime('now', ?)"
+        " ORDER BY collected_at DESC LIMIT ?", (f"-{days} days", limit))
+    ids = [r[0] for r in await cur.fetchall()]
+    created = 0
+    for lid in ids:
+        facts = await store.get_facts(lid)
+        if not facts:
+            continue
+        result = match(facts, profile)
+        if result.matched:
+            if await store.add_match(profile_id, lid, result.rank, result.reasons):
+                created += 1
+    log.info("профиль %s: пересчёт по %d объявлениям, новых совпадений %d",
+             profile_id, len(ids), created)
+    return created
+
+
 async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> dict:
     """Дозаполнить факты моделью и пересчитать совпадения.
 
@@ -189,10 +218,26 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
     from extract.llm import fill_gaps
     from extract.schema import Facts
 
+    # Дозаполняем не всё подряд, а то, что кому-то может пригодиться. Иначе
+    # деньги уходят на объявления из чужих городов: канал по Хайфе читается,
+    # пока хоть один профиль её ищет, но его объявления никому не нужны.
+    profiles = await store.active_profiles()
+    if not profiles:
+        return {"enriched": 0, "failed": 0, "cost_usd": 0.0, "skipped_no_profiles": True}
+    cities = sorted({c for p in profiles for c in (p.get("cities") or [])})
+
+    city_clause, params = "", []
+    if cities:
+        placeholders = ",".join("?" * len(cities))
+        # город неизвестен — оставляем: как раз модель его чаще всего и определяет
+        city_clause = f" AND (f.city IS NULL OR f.city IN ({placeholders}))"
+        params = cities
+
     cur = await store._db.execute(
         "SELECT l.id FROM listings l JOIN listing_facts f ON f.listing_id = l.id"
-        " WHERE f.source_layer = 'rules' AND l.status = 'extracted'"
-        " ORDER BY l.collected_at DESC LIMIT ?", (limit,))
+        " WHERE f.source_layer = 'rules' AND l.status = 'extracted'" + city_clause +
+        " ORDER BY EXISTS (SELECT 1 FROM matches m WHERE m.listing_id = l.id) DESC,"
+        "          l.collected_at DESC LIMIT ?", (*params, limit))
     ids = [r[0] for r in await cur.fetchall()]
 
     done = failed = 0
