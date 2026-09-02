@@ -51,7 +51,17 @@ def text_similarity(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
-def listing_id(url: Optional[str], text: str) -> str:
+def listing_id(url: Optional[str], text: str, source_id: Optional[str] = None) -> str:
+    """Устойчивый идентификатор объявления.
+
+    Сначала — идентификатор из самого источника: он точен и не зависит от того,
+    как выглядит ссылка. Это не мелочь: у Komo адрес объявления вида
+    `/code/nadlan/details/?modaaNum=123`, и отбрасывание query-строки (нужное
+    для Yad2, где в хвосте болтается разметка кампании) схлопывало все семьдесят
+    семь объявлений в одно. Первый прогон дал 76 «дубликатов» из 77.
+    """
+    if source_id:
+        return hashlib.sha256(source_id.encode()).hexdigest()[:20]
     base = (url or "").split("?")[0].rstrip("/") or text[:500]
     return hashlib.sha256(base.encode()).hexdigest()[:20]
 
@@ -108,7 +118,7 @@ async def process(store: Store, raw: dict) -> dict:
     """Обработать одно сырое объявление. Возвращает, что с ним стало."""
     text = raw.get("raw_text") or ""
     url = raw.get("url")
-    lid = listing_id(url, text)
+    lid = listing_id(url, text, raw.get("source_id"))
 
     if await store.listing_exists(lid):
         return {"status": "duplicate", "listing_id": lid}

@@ -78,16 +78,16 @@ def channels_for(cities) -> list:
 # из шести не запрашивались ни разу (F-10).
 
 CITY_CODES = {
-    "Tel Aviv":    {"yad2": "5000", "homeless": "תל אביב יפו"},
-    "Ramat Gan":   {"yad2": "8600", "homeless": "רמת גן"},
-    "Givatayim":   {"yad2": "6900", "homeless": "גבעתיים"},
-    "Bnei Brak":   {"yad2": "7900", "homeless": "בני ברק"},
-    "Bat Yam":     {"yad2": "6600", "homeless": "בת ים"},
-    "Holon":       {"yad2": "6400", "homeless": "חולון"},
-    "Herzliya":    {"homeless": "הרצליה"},
-    "Petah Tikva": {"homeless": "פתח תקווה"},
-    "Jerusalem":   {"homeless": "ירושלים"},
-    "Haifa":       {"homeless": "חיפה"},
+    "Tel Aviv":    {"yad2": "5000", "homeless": "תל אביב יפו", "komo": "תל אביב יפו"},
+    "Ramat Gan":   {"yad2": "8600", "homeless": "רמת גן", "komo": "רמת גן"},
+    "Givatayim":   {"yad2": "6900", "homeless": "גבעתיים", "komo": "גבעתיים"},
+    "Bnei Brak":   {"yad2": "7900", "homeless": "בני ברק", "komo": "בני ברק"},
+    "Bat Yam":     {"yad2": "6600", "homeless": "בת ים", "komo": "בת ים"},
+    "Holon":       {"yad2": "6400", "homeless": "חולון", "komo": "חולון"},
+    "Herzliya":    {"homeless": "הרצליה", "komo": "הרצליה"},
+    "Petah Tikva": {"homeless": "פתח תקווה", "komo": "פתח תקווה"},
+    "Jerusalem":   {"homeless": "ירושלים", "komo": "ירושלים"},
+    "Haifa":       {"homeless": "חיפה", "komo": "חיפה"},
 }
 
 

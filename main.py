@@ -21,7 +21,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot.app import build
-from collectors import homeless, yad2
+from collectors import homeless, komo, yad2
 from collectors.telegram_v2 import TelegramMonitor
 from core import delivery, pipeline, settings
 from core.sources import channels_for
@@ -133,6 +133,9 @@ async def main():
     async def job_homeless():
         await _collect_board("homeless", homeless.collect)
 
+    async def job_komo():
+        await _collect_board("komo", komo.collect)
+
     async def job_yad2():
         await _collect_board("yad2", yad2.collect)
 
@@ -164,6 +167,7 @@ async def main():
         (job_retry, settings.RETRY_INTERVAL_MIN, "retry", 600),
         (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck", 30),
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
+        (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
     ) + ((
         (job_yad2, settings.YAD2_INTERVAL_MIN, "yad2", 240),
     ) if settings.YAD2_ENABLED else ()):
