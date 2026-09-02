@@ -35,6 +35,11 @@ TG_SESSION = os.getenv("TELEGRAM_SESSION_STRING", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
+# Прокси для Yad2: пробуются по порядку, у каждого свой бесплатный лимит.
+SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")
+SCRAPEDO_KEY = os.getenv("SCRAPEDO_KEY", "")
+SCRAPINGBEE_KEY = os.getenv("SCRAPINGBEE_KEY", "")
+
 HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
 HEALTHCHECK_INTERVAL_MIN = 10
 
@@ -47,3 +52,14 @@ ENRICH_BATCH = 25
 RETRY_INTERVAL_MIN = 60
 DELIVERY_INTERVAL_MIN = 5
 BACKFILL_DAYS = 3
+
+# Доски объявлений опрашиваются по расписанию: у них нет «живой ленты», как у
+# Telegram. Раз в час для Homeless (бесплатно) и раз в два часа для Yad2, где
+# каждый запрос тратит квоту прокси.
+HOMELESS_INTERVAL_MIN = 60
+
+# Yad2 выключен: бесплатные лимиты прокси его больше не берут (см.
+# research/sources.md). Коллектор написан и рабочий — как только появится
+# способ получать страницу, достаточно поставить True.
+YAD2_ENABLED = False
+YAD2_INTERVAL_MIN = 180

@@ -115,6 +115,16 @@ async def process(store: Store, raw: dict) -> dict:
 
     facts = extract(text)
 
+    # Факты, пришедшие от самого источника (Yad2, Homeless), важнее того, что мы
+    # вытащили из текста: там это поля базы, а не наша догадка по строке. Заодно
+    # такие объявления не попадают к модели — спрашивать нечего.
+    hints = raw.get("facts") or {}
+    for name, value in hints.items():
+        if value is not None and hasattr(facts, name):
+            setattr(facts, name, value)
+    if hints:
+        facts.source_layer = "source"
+
     # город из метаданных канала, если в тексте его нет
     if facts.city is None:
         hint = region_of(raw.get("channel"))

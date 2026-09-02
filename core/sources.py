@@ -65,3 +65,37 @@ def channels_for(cities) -> list:
         if region is None or not wanted or region in wanted:
             out.append(name)
     return out
+
+
+# ── города: как они называются в каждом источнике ────────────────────────────
+# Ключ — наше внутреннее английское имя (оно же приходит из визарда и лежит в
+# профилях). Значения — то, чем город зовётся у Yad2 (числовой код) и у
+# Homeless (ивритское название в URL).
+#
+# Города, которых здесь нет, просто не сканируются на этом источнике: это то же
+# правило, что и для каналов — не запрашиваем то, что никто не ищет. В v1 в
+# конфиге лежали шесть городов, а URL Yad2 был захардкожен на Тель-Авив, и пять
+# из шести не запрашивались ни разу (F-10).
+
+CITY_CODES = {
+    "Tel Aviv":    {"yad2": "5000", "homeless": "תל אביב יפו"},
+    "Ramat Gan":   {"yad2": "8600", "homeless": "רמת גן"},
+    "Givatayim":   {"yad2": "6900", "homeless": "גבעתיים"},
+    "Bnei Brak":   {"yad2": "7900", "homeless": "בני ברק"},
+    "Bat Yam":     {"yad2": "6600", "homeless": "בת ים"},
+    "Holon":       {"yad2": "6400", "homeless": "חולון"},
+    "Herzliya":    {"homeless": "הרצליה"},
+    "Petah Tikva": {"homeless": "פתח תקווה"},
+    "Jerusalem":   {"homeless": "ירושלים"},
+    "Haifa":       {"homeless": "חיפה"},
+}
+
+
+def source_cities(cities, source: str) -> list:
+    """[(наше имя, код источника)] для тех городов, которые источник знает."""
+    out = []
+    for name in cities or []:
+        code = CITY_CODES.get(name, {}).get(source)
+        if code:
+            out.append((name, code))
+    return out
