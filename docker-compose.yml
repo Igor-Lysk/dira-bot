@@ -1,36 +1,22 @@
+# Разворачивание на berlin: rootless Docker, без sudo, порты 3000+.
+#
+# mem_limit обязателен: на машине около гигабайта свободной памяти и живут
+# чужие сервисы. Лучше упасть самим, чем уронить соседа.
 services:
   dira-bot:
     build: .
     container_name: dira-bot
     restart: unless-stopped
     env_file: .env
+    environment:
+      DB_PATH: /app/data/dira.db
+      TZ: Asia/Jerusalem
     volumes:
-      - ./data:/app/data    # persist SQLite database
-      # Read/write access to host docker socket so the bot can lazy-start /
-      # stop the flaresolverr container on demand. Adjust this path to your
-      # host: standard Docker → /var/run/docker.sock; rootless Docker →
-      # /run/user/$UID/docker.sock or ~/.docker/run/docker.sock.
-      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./data:/app/data
+    mem_limit: 400m
+    memswap_limit: 600m
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-
-  # Headless Chrome proxy that solves Cloudflare/Reblaze JS challenges.
-  # NOT started by default — dira-bot starts it on demand via the docker
-  # socket when all paid proxy providers fail, and stops it after 10 min
-  # of idle. The `manual` profile excludes it from `docker compose up`.
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
-    profiles: ["manual"]
-    restart: "no"
-    mem_limit: 900m
-    memswap_limit: 900m
-    environment:
-      LOG_LEVEL: info
-      LOG_HTML: "false"
-      CAPTCHA_SOLVER: none
-      TZ: Asia/Jerusalem
-      BROWSER_TIMEOUT:

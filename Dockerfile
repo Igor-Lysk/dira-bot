@@ -2,16 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Зависимости отдельным слоем: код меняется часто, список пакетов — редко.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source
 COPY . .
 
-# Create data directory for SQLite
-RUN mkdir -p /app/data
+# База лежит на томе, а не в образе: пересборка не должна стирать собранное.
+ENV DB_PATH=/app/data/dira.db
+VOLUME ["/app/data"]
 
-ENV PYTHONUNBUFFERED=1
-
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]
