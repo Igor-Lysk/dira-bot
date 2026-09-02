@@ -196,7 +196,17 @@ _PRICE_FALLBACK = [
 ]
 
 
+# «От 2 500 ₪/месяц» в объявлении агентства — это не цена квартиры, а нижняя
+# граница по десятку разных квартир. Такие объявления вдобавок обычно посуточные
+# и отсекаются как саблет, но цену из них брать нельзя в любом случае.
+_PRICE_FROM_RE = re.compile(r'(?:^|[^\w])(?:от|from|החל\s*מ)\s*[\d,. ]{3,8}\s*(?:₪|ש"ח|שח|шек|nis)',
+                            re.IGNORECASE)
+
+
 def _price(txt: str):
+    if _PRICE_FROM_RE.search(txt) and not re.search(r"(?:מחיר|цена|price|שכ[\"\u05f4]?ד)\s*[:：]", txt, re.IGNORECASE):
+        # цена указана только как «от», конкретной нет
+        return None
     v = rules.extract_price(txt)
     if v is not None:
         return v
@@ -270,8 +280,15 @@ _NOT_A_ROOM_RE = re.compile(
     r'гардеробн\w*|детск\w*)\s+комнат', re.IGNORECASE)
 
 
+# «Квартиры 1–4 комнаты» — объявление агентства сразу о нескольких квартирах.
+# Брать из него число комнат нельзя: это диапазон, а не характеристика жилья.
+_ROOMS_RANGE_RE = re.compile(r'\d\s*[–—−-]\s*\d\s*(?:комнат|חדר)', re.IGNORECASE)
+
+
 def _rooms(txt: str):
     """Комнаты по израильскому счёту: гостиная считается комнатой."""
+    if _ROOMS_RANGE_RE.search(txt):
+        return None
     # сначала убираем «ванная комната» и подобное, чтобы они не считались
     clean = _NOT_A_ROOM_RE.sub(" ", txt)
 
@@ -311,16 +328,18 @@ def _rooms(txt: str):
         if 1 <= v <= 10:
             return v
 
+    # Явно названное число комнат важнее пересчёта из спален: в объявлении
+    # «4 חדרים … 2 חדרי שינה» верный ответ 4, а пересчёт спален дал бы 3.
+    v = rules.extract_rooms(txt)
+    if v is not None:
+        return v
+
     for rx in (_BEDROOMS_HE_RE, _BEDROOMS_EN_RE):
         m = rx.search(txt)
         if m:
             v = float(m.group(1).replace(",", ".")) + 1   # + салон
             if 1 <= v <= 10:
                 return v
-
-    v = rules.extract_rooms(txt)
-    if v is not None:
-        return v
 
     if _STUDIO_RE.search(txt):
         return 1.0
