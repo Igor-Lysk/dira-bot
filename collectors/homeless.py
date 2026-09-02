@@ -16,7 +16,7 @@ from typing import Optional
 
 import httpx
 
-from core.sources import source_cities
+from core.sources import city_from_hebrew, source_cities
 
 log = logging.getLogger(__name__)
 
@@ -28,11 +28,21 @@ _ROW_RE = re.compile(r'<tr[^>]*id="ad_(\d+)"[^>]*>(.*?)</tr>', re.S)
 _CELL_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# Порядок колонок в таблице (проверен на живой странице):
-# 0 чекбокс · 1 фото · 2 тип · 3 город · 4 район · 5 улица · 6 комнаты
-# 7 этаж · 8 цена · 9 дата въезда · 10 дата публикации
-COL = {"type": 2, "city": 3, "district": 4, "street": 5, "rooms": 6,
-       "floor": 7, "price": 8, "entry": 9, "published": 10}
+# Разбор идёт по содержимому ячеек, а не по их номерам.
+#
+# Причина конкретная: в таблице встречаются строки и с 12 ячейками, и с 11 —
+# когда этаж не указан, он не пустеет, а исчезает, и всё правое съезжает влево.
+# Жёсткие индексы давали «9 ₪ в месяц» и «этаж 15500»: цена попадала в этаж, а
+# дата — в цену. Вылезло сразу же, как только карточки попали в ленту бота.
+#
+# Стабильна только левая часть: тип, город, район, улица. Дальше опираемся на
+# то, что видно в самой ячейке — шекель, формат даты, маленькое число.
+
+COL_TYPE, COL_CITY, COL_DISTRICT, COL_STREET = 2, 3, 4, 5
+
+_PRICE_CELL_RE = re.compile(r"[\d,]{3,}\s*(?:₪|&#8362;)")
+_DATE_CELL_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+_NUM_CELL_RE = re.compile(r"^\d+(?:\.\d)?$")
 
 
 def _text(cell: str) -> str:
@@ -45,9 +55,9 @@ def _number(value: str) -> Optional[float]:
 
 
 def _entry_date(value: str) -> Optional[str]:
-    """«01/01/2026» → ISO; «מיידי» → now."""
+    """«01/01/2026» → ISO, «מיידי» → now, «גמיש» (по договорённости) → нет данных."""
     value = (value or "").strip()
-    if not value:
+    if not value or "גמיש" in value:
         return None
     if "מיידי" in value:
         return "now"
@@ -56,27 +66,34 @@ def _entry_date(value: str) -> Optional[str]:
 
 
 def _to_raw(ad_id: str, cells: list, city_name: str) -> Optional[dict]:
-    if len(cells) <= COL["published"]:
+    if len(cells) <= COL_STREET:
         return None
-    get = lambda key: cells[COL[key]] if COL[key] < len(cells) else ""   # noqa: E731
 
-    price = _number(get("price"))
-    rooms = _number(get("rooms"))
-    floor = _number(get("floor"))
-    street, district = get("street"), get("district")
+    price_at = next((i for i, c in enumerate(cells) if "₪" in c), None)
+    if price_at is None:
+        return None
+    price = _number(cells[price_at])
 
-    # Текст собираем сами — он нужен и для карточки, и чтобы отработали общие
-    # фильтры (саблет, комната с соседями), и как исходник, если позже
-    # понадобится переизвлечение.
-    parts = [get("type"), get("city"), district, street]
+    # между улицей и ценой стоят комнаты и, если он указан, этаж
+    middle = [c for c in cells[COL_STREET + 1:price_at] if _NUM_CELL_RE.match(c)]
+    rooms = float(middle[0]) if middle else None
+    floor = float(middle[1]) if len(middle) > 1 else None
+
+    # сразу за ценой — дата въезда, последняя дата в строке — дата публикации
+    entry = cells[price_at + 1] if price_at + 1 < len(cells) else ""
+    posted = next((c for c in reversed(cells) if _DATE_CELL_RE.match(c)), None)
+
+    district, street = cells[COL_DISTRICT], cells[COL_STREET]
+
+    parts = [cells[COL_TYPE], cells[COL_CITY], district, street]
     if rooms:
         parts.append(f"{rooms:g} חדרים")
     if floor is not None:
         parts.append(f"קומה {floor:g}")
     if price:
         parts.append(f"{price:g} ₪")
-    if get("entry"):
-        parts.append(f"כניסה {get('entry')}")
+    if entry:
+        parts.append(f"כניסה {entry}")
     raw_text = ", ".join(p for p in parts if p)
 
     return {
@@ -85,15 +102,18 @@ def _to_raw(ad_id: str, cells: list, city_name: str) -> Optional[dict]:
         "channel": "homeless",
         "url": f"{BASE}/rent/viewad,{ad_id}.aspx",
         "raw_text": raw_text,
+        "posted_at": posted,
         # Факты из источника: их не надо извлекать и незачем перепроверять моделью.
         "facts": {
-            "city": city_name,
+            # город берём из самого объявления: в выдаче по городу попадаются
+            # соседние населённые пункты
+            "city": city_from_hebrew(cells[COL_CITY], city_name),
             "district": district or None,
             "street": street or None,
             "rooms": rooms,
             "floor": int(floor) if floor is not None else None,
             "price": int(price) if price else None,
-            "entry_date": _entry_date(get("entry")),
+            "entry_date": _entry_date(entry),
             "deal_type": "rent",
         },
     }

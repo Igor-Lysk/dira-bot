@@ -212,9 +212,14 @@ class Store:
             (profile_id, limit))
         return _rows(await cur.fetchall())
 
+    # `new` входит в ленту наравне с отправленным: человек спрашивает «что
+    # нашлось», а не «что мне уже прислали». Без этого /feed показывал «пока
+    # пусто» при 129 подобранных объявлениях, ждущих утреннего дайджеста —
+    # первое, что вылезло при живой проверке бота.
+    FEED_STATES = ("new", "sent", "saved", "contacted", "waiting", "visit")
+
     async def feed(self, profile_id: int, order: str = "rank", limit: int = 5,
-                   offset: int = 0, states: tuple = ("sent", "saved", "contacted",
-                                                     "waiting", "visit")) -> list:
+                   offset: int = 0, states: tuple = FEED_STATES) -> list:
         """Лента с сортировкой. Порядок выбирает пользователь и он запоминается."""
         orders = {
             "rank": "m.rank DESC",

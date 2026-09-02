@@ -25,7 +25,7 @@ from typing import Optional
 
 import httpx
 
-from core.sources import source_cities
+from core.sources import city_from_hebrew, source_cities
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,9 @@ def _to_raw(ad_id: str, block: str, city_name: str) -> Optional[dict]:
 
     # «רמת גן, יד לבנים, צל הגבעה 16» — город, район, улица с номером
     parts = [p.strip() for p in title.split(",") if p.strip()]
+    # «רמת גן, יד לבנים, צל הגבעה 16»: первым идёт город объявления, а он не
+    # обязан совпадать с городом, по которому мы спрашивали
+    city = city_from_hebrew(parts[0], city_name) if parts else city_name
     district = parts[1] if len(parts) > 2 else None
     street = parts[-1] if len(parts) > 1 else None
 
@@ -82,7 +85,7 @@ def _to_raw(ad_id: str, block: str, city_name: str) -> Optional[dict]:
         "url": f"{BASE}/code/nadlan/details/?modaaNum={ad_id}",
         "raw_text": f"{title}. {desc}" + (f" {price} ₪" if price else ""),
         "facts": {
-            "city": city_name,
+            "city": city,
             "district": district,
             "street": street,
             "rooms": float(rooms.group(1)) if rooms else None,

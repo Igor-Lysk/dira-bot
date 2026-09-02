@@ -39,7 +39,10 @@ async def main():
     migrate(args.db, verbose=False)
     store = await Store(args.db).connect()
 
-    user = await store.ensure_user(TEST_TELEGRAM_ID, "tester", "Игорь")
+    # Тестовый пользователь: id берётся из окружения, чтобы личный telegram_id
+    # не лежал в публичном репозитории.
+    test_id = int(os.environ.get("TEST_TELEGRAM_ID", "1"))
+    user = await store.ensure_user(test_id, "tester", "Тестовый пользователь")
     if not await store.profiles_of(user["telegram_id"]):
         await store.create_profile(
             user["telegram_id"], "Основной",

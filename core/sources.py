@@ -99,3 +99,31 @@ def source_cities(cities, source: str) -> list:
         if code:
             out.append((name, code))
     return out
+
+
+# Обратная карта: ивритское написание → наше имя. Нужна потому, что доски
+# отдают в выдаче по городу и соседние населённые пункты тоже: в списке по
+# Бней-Браку попалось объявление с районом «שאר העיר חולון», и город был
+# подписан по запросу, а не по объявлению.
+_HEBREW_TO_NAME = {}
+for _name, _codes in CITY_CODES.items():
+    for _key in ("homeless", "komo"):
+        _value = _codes.get(_key)
+        if _value:
+            _HEBREW_TO_NAME[_value] = _name
+_HEBREW_TO_NAME.update({
+    "תל אביב": "Tel Aviv",
+    "תל אביב-יפו": "Tel Aviv",
+    "יפו": "Tel Aviv",
+})
+
+
+def city_from_hebrew(value: str, default: str = None) -> str:
+    """Наше имя города по тому, как он написан в объявлении."""
+    value = (value or "").strip()
+    if value in _HEBREW_TO_NAME:
+        return _HEBREW_TO_NAME[value]
+    for hebrew, name in _HEBREW_TO_NAME.items():
+        if hebrew and hebrew in value:
+            return name
+    return default
