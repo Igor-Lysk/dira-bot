@@ -114,6 +114,16 @@ def match(facts: dict, profile: dict, market: dict = None) -> MatchResult:
         if profile.get("floor_max") is not None and floor > profile["floor_max"]:
             return MatchResult(False, rejected_by=f"этаж {floor} выше допустимого")
 
+    # Комиссия живёт отдельным полем, а не признаком «есть/нет»: в нём лежит
+    # либо 'none', либо сумма или процент строкой.
+    fee_mode = profile.get("req_no_commission", IGNORE)
+    if fee_mode != IGNORE:
+        fee = facts.get("commission")
+        if fee_mode == REQUIRED and fee != "none":
+            return MatchResult(False, rejected_by=f"комиссия: {fee or 'нет данных'}")
+        if fee_mode == ALLOW_UNKNOWN and fee not in (None, "none"):
+            return MatchResult(False, rejected_by=f"комиссия: {fee}")
+
     for key, fact_field in FEATURE_REQUIREMENTS.items():
         mode = profile.get(key, IGNORE)
         if mode == IGNORE:
@@ -176,8 +186,10 @@ def match(facts: dict, profile: dict, market: dict = None) -> MatchResult:
 
     if facts.get("no_broker") == "yes":
         reasons.append(("без посредника", 0.6))
-    if facts.get("commission") and facts.get("commission") != "none":
-        reasons.append(("есть комиссия", -0.4))
+    if facts.get("commission") == "none":
+        reasons.append(("без комиссии", 0.8))
+    elif facts.get("commission"):
+        reasons.append((f"комиссия: {facts['commission']}", -0.8))
 
     if facts.get("immediate_entry") == "yes":
         reasons.append(("въезд сразу", 0.3))

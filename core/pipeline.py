@@ -245,6 +245,55 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
     return created
 
 
+async def fetch_details(store: Store, limit: int = 15) -> dict:
+    """Дочитать страницы объявлений, которые кому-то подошли.
+
+    Отбор именно такой: страница нужна не для всех, а для тех, что человек
+    увидит. На них есть описание от хозяина и комиссия — единственные деньги
+    в сделке, которых нет ни в одной строке таблицы.
+    """
+    from collectors import details as details_mod
+
+    cur = await store._db.execute(
+        "SELECT DISTINCT l.id, l.url, l.source FROM listings l"
+        " JOIN matches m ON m.listing_id = l.id"
+        " WHERE l.details_at IS NULL AND l.url IS NOT NULL"
+        "   AND l.source IN ('homeless','komo')"
+        " ORDER BY m.rank DESC LIMIT ?", (limit,))
+    rows = await cur.fetchall()
+    if not rows:
+        return {"fetched": 0}
+
+    filled = 0
+    client = await details_mod.make_client()
+    try:
+        for lid, url, source in rows:
+            page = await details_mod.fetch(client, url, source)
+            await store._db.execute(
+                "UPDATE listings SET details_at = datetime('now') WHERE id = ?", (lid,))
+            if not page:
+                continue
+            if page["description"]:
+                # описание дописываем к тексту: LLM-слой и фильтр стоп-слов
+                # работают по нему же
+                await store._db.execute(
+                    "UPDATE listings SET raw_text = raw_text || ? WHERE id = ?",
+                    ("\n\n" + page["description"], lid))
+            if page["facts"]:
+                existing = await store.get_facts(lid)
+                merged = {k: v for k, v in page["facts"].items()
+                          if v is not None and existing.get(k) is None
+                          or k == "commission"}
+                if merged:
+                    await store.save_facts(lid, merged)
+                    filled += 1
+            await match_listing(store, lid)
+        await store._db.commit()
+    finally:
+        await client.aclose()
+    return {"fetched": len(rows), "filled": filled}
+
+
 async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> dict:
     """Дозаполнить факты моделью и пересчитать совпадения.
 

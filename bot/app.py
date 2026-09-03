@@ -113,7 +113,7 @@ def _feed_kb(order: str, flt: str, offset: int, has_more: bool) -> InlineKeyboar
 EDITABLE = [
     ("cities", "Города"), ("price_max", "Потолок цены"), ("price_ideal", "Желаемая цена"),
     ("rooms_min", "Комнаты"), ("req_mamad", "Мамад"), ("req_elevator", "Лифт"),
-    ("req_pets", "Животные"), ("delivery_mode", "Как присылать"),
+    ("req_pets", "Животные"), ("req_no_commission", "Комиссия"), ("delivery_mode", "Как присылать"),
     ("digest_hour", "Время дайджеста"), ("stop_words", "Стоп-слова"),
 ]
 
@@ -370,6 +370,7 @@ async def cmd_settings(message: Message, user: dict, store: Store):
         "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
         "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
         "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
+        "req_no_commission": p["req_no_commission"],
         "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
         "stop_words": p["stop_words"],
     }
@@ -392,6 +393,7 @@ async def on_edit_field(callback: CallbackQuery, user: dict, store: Store):
         "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
         "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
         "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
+        "req_no_commission": p["req_no_commission"],
         "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
         "stop_words": p["stop_words"], "_edit_only": key,
     }

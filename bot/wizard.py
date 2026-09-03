@@ -100,6 +100,16 @@ STEPS = [
         "question": "Лифт нужен?",
     },
     {
+        "key": "req_no_commission",
+        "kind": "tristate",
+        "title": "Комиссия маклера",
+        "question": "Комиссия — это обычно месячная аренда сверху. Искать только без неё?",
+        "hint": "«Обязательно» оставит объявления, где прямо написано «ללא תיווך». "
+                "«Можно без данных» добавит те, где про комиссию не сказано — а это "
+                "большинство: структурного поля под неё нет ни на одной доске, "
+                "она встречается только в тексте.",
+    },
+    {
         "key": "req_pets",
         "kind": "tristate",
         "title": "Животные",
@@ -272,6 +282,7 @@ def to_profile(data: dict) -> dict:
         "req_mamad": data.get("req_mamad", "ignore"),
         "req_elevator": data.get("req_elevator", "ignore"),
         "req_pets": data.get("req_pets", "ignore"),
+        "req_no_commission": data.get("req_no_commission", "ignore"),
         "delivery_mode": data.get("delivery_mode", "digest"),
         "stop_words": data.get("stop_words") or [],
     }
@@ -293,6 +304,7 @@ def summary(data: dict) -> str:
         f"Мамад: {tri.get(data.get('req_mamad'), 'неважно')}",
         f"Лифт: {tri.get(data.get('req_elevator'), 'неважно')}",
         f"Животные: {tri.get(data.get('req_pets'), 'неважно')}",
+        f"Комиссия: {tri.get(data.get('req_no_commission'), 'неважно')}",
     ]
     if data.get("delivery_mode") == "realtime":
         lines.append("Присылать: сразу")

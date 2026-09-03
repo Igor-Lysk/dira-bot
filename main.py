@@ -135,6 +135,12 @@ async def main():
             log.info("%s: собрано %d, новых %d, совпадений %d, скрыто как снятые %s",
                      name, len(items), new, matches, presence.get("hidden"))
 
+    async def job_details():
+        result = await pipeline.fetch_details(store, limit=settings.DETAILS_BATCH)
+        if result.get("fetched"):
+            log.info("страницы объявлений: прочитано %d, дозаполнено %d",
+                     result["fetched"], result.get("filled", 0))
+
     async def job_homeless():
         await _collect_board("homeless", homeless.collect)
 
@@ -205,6 +211,7 @@ async def main():
         (job_memory, settings.MEMORY_CHECK_INTERVAL_MIN, "memory", 45),
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
+        (job_details, settings.DETAILS_INTERVAL_MIN, "details", 180),
     ) + ((
         (job_yad2, settings.YAD2_INTERVAL_MIN, "yad2", 240),
     ) if settings.YAD2_ENABLED else ()):
