@@ -40,6 +40,28 @@ def _presence_sql() -> str:
     return ",".join(f"'{name}'" for name in PRESENCE_SOURCES) or "''"
 
 
+def _freshness_sql(alias: str = "l") -> str:
+    """Условие свежести: у одних источников присутствие, у других — свой срок.
+
+    Единый порог не годится: Telegram-пост не исчезает и стареет за неделю, а
+    объявление Komo висит на первой странице около двух недель и всё это время
+    актуально."""
+    from core.sources import (DEFAULT_MAX_AGE_DAYS, MAX_AGE_DAYS,
+                              MISSED_SCANS_TO_HIDE, PRESENCE_SOURCES)
+    presence = _presence_sql()
+    parts = [f"({alias}.source IN ({presence})"
+             f" AND {alias}.missed_scans < {MISSED_SCANS_TO_HIDE})"]
+    for source, days in MAX_AGE_DAYS.items():
+        if source in PRESENCE_SOURCES:
+            continue
+        parts.append(f"({alias}.source = '{source}' AND COALESCE({alias}.posted_at,"
+                     f" {alias}.collected_at) >= date('now', '-{days} days'))")
+    known = ",".join(f"'{s}'" for s in set(MAX_AGE_DAYS) | set(PRESENCE_SOURCES))
+    parts.append(f"({alias}.source NOT IN ({known}) AND COALESCE({alias}.posted_at,"
+                 f" {alias}.collected_at) >= date('now', '-{DEFAULT_MAX_AGE_DAYS} days'))")
+    return " AND (" + " OR ".join(parts) + ")"
+
+
 def _dump(value: Any) -> Any:
     return json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value
 
@@ -248,7 +270,7 @@ class Store:
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             " WHERE m.profile_id=? AND m.state='new'"
-            f"   AND ((l.source IN ({_presence_sql()}) AND l.missed_scans < 3)"
+            + _freshness_sql("l") +
             f"     OR (l.source NOT IN ({_presence_sql()})"
             f"         AND COALESCE(l.posted_at, l.collected_at) >="
             f"             date('now', '-{self.MAX_AGE_DAYS} days')))"
@@ -285,14 +307,8 @@ class Store:
             "sqm_price": "f.price IS NULL OR f.area_sqm IS NULL, "
                          "CAST(f.price AS REAL) / NULLIF(f.area_sqm, 0) ASC",
         }
-        # Свежесть считается по-разному: где доску видно целиком, объявление
-        # живо, пока оно в выдаче; где нет — по дате (решение 0005).
-        from core.sources import MISSED_SCANS_TO_HIDE, PRESENCE_SOURCES
-        presence = ",".join(f"'{s}'" for s in PRESENCE_SOURCES) or "''"
-        age = (f" AND ((l.source IN ({presence}) AND l.missed_scans < {MISSED_SCANS_TO_HIDE})"
-               f"   OR (l.source NOT IN ({presence})"
-               f"       AND COALESCE(l.posted_at, l.collected_at) >= "
-               f"           date('now', '-{self.MAX_AGE_DAYS} days')))")
+        # Свежесть считается по-разному в зависимости от источника (решение 0005)
+        age = _freshness_sql("l")
         filters = {
             "all": "",
             "mamad": " AND (f.mamad = 'yes' OR f.mamad_evidence IS NOT NULL)",
