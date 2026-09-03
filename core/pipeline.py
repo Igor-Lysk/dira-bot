@@ -287,6 +287,12 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                 if merged:
                     await store.save_facts(lid, merged)
                     filled += 1
+            if page["description"]:
+                # У объявления появился текст, которого модель ещё не видела.
+                # Возвращаем строку фактов в слой «только правила», чтобы её
+                # подобрал проход дозаполнения: комиссия, мебель, лифт живут
+                # именно в описании, а не в подписях доски.
+                await store.save_facts(lid, {"source_layer": "rules"})
             await match_listing(store, lid)
         await store._db.commit()
     finally:
