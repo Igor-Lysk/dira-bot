@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 
 TZ = ZoneInfo("Asia/Jerusalem")
 REALTIME_BATCH = 5          # сколько карточек за раз, чтобы не залить чат
+DIGEST_LIMIT = 15           # строк в одном дайджесте; остальное — по /feed
 
 
 def _now() -> datetime:
@@ -89,26 +90,35 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
 async def deliver_digest(bot, store: Store, profile: dict, force: bool = False) -> int:
     """Собрать накопленное в одно сообщение и отправить.
 
-    Формат пока минимальный: строка на объявление со ссылкой. Каким дайджест
-    должен быть по-настоящему — отдельная задача, вынесена в TODO.
+    Раз в сутки, а не «в течение часа»: проверка `час == digest_hour` истинна
+    все шестьдесят минут, а задача доставки просыпается каждые пять. В первое же
+    утро это дало двадцать четыре сообщения между 9:00 и 9:25 вместо одного —
+    шесть срабатываний по дайджесту и три карточки в придачу к каждому.
+    Поэтому дата последней отправки лежит в профиле, и повторно за день дайджест
+    не уходит.
     """
     if profile.get("is_paused"):
         return 0
-    if not force and _now().hour != (profile.get("digest_hour") or 9):
-        return 0
+    now = _now()
+    today = now.date().isoformat()
+    if not force:
+        if now.hour != (profile.get("digest_hour") or 9):
+            return 0
+        if profile.get("digest_sent_on") == today:
+            return 0
 
-    queue = await store.queue_for(profile["id"], limit=profile.get("max_per_day") or 20)
+    queue = await store.queue_for(profile["id"], limit=DIGEST_LIMIT)
+    total = len(await store.queue_for(profile["id"], limit=1000))
     if not queue:
+        # отметку ставим всё равно: пустой день — тоже отработанный день,
+        # иначе следующая пятиминутка попробует снова
+        await store.update_profile(profile["id"], digest_sent_on=today)
         return 0
 
-    await bot.send_message(profile["user_id"], cards.digest(queue),
+    await bot.send_message(profile["user_id"], cards.digest(queue, total=total),
                            parse_mode="HTML", disable_web_page_preview=True)
-    # Первые три идут отдельными карточками с кнопками: по списку нельзя ни
-    # отметить статус, ни открыть подробности.
-    for facts in queue[:3]:
-        await _send_card(bot, profile["user_id"], facts, rank=facts.get("rank"),
-                         reasons=facts.get("reasons"))
     await store.mark_sent(profile["id"], [f["listing_id"] for f in queue])
+    await store.update_profile(profile["id"], digest_sent_on=today)
     return len(queue)
 
 

@@ -129,23 +129,40 @@ def details(facts: dict) -> str:
     return "\n".join(f"{name}: {value}" for name, value in rows)
 
 
-def digest(items: list, title: str = "Новые квартиры") -> str:
-    """Дайджест: компактный список с самым важным.
+def digest_line(facts: dict) -> str:
+    """Одна строка дайджеста. Всё, что помещается на экран телефона, и ничего сверх."""
+    # цену собираем отдельно от карточки: в строке дайджеста не нужны ни «/мес»,
+    # ни цена за метр — она удлиняет строку и на телефоне переносится
+    price = facts.get("price")
+    parts = [f"{price:,}".replace(",", " ") + " ₪" if price else "цена ?"]
+    if facts.get("rooms"):
+        parts.append(f"{facts['rooms']:g}к")
+    if facts.get("area_sqm"):
+        parts.append(f"{facts['area_sqm']} м²")
+    parts.append(_address(facts))
+    if facts.get("mamad") == "yes":
+        parts.append("мамад")
+    elif facts.get("mamad_evidence"):
+        parts.append("мамад?")
+    return " · ".join(escape(str(p)) for p in parts if p)
 
-    Формат намеренно простой: одна строка на объявление плюс ссылка. Подробный
-    разбор того, каким дайджест должен быть, отложен в отдельную задачу — здесь
-    рабочий минимум, чтобы режим доставки существовал."""
+
+def digest(items: list, total: int = None, title: str = "Новое за сутки") -> str:
+    """Компактный список: строка на объявление, вся строка — ссылка.
+
+    Формат выбран под чтение с телефона: без карточек, без таблиц, без
+    объяснений ранга. Реальный поток при настроенном профиле — 5–10 объявлений
+    в день, и на экран они помещаются целиком.
+    """
     if not items:
-        return f"<b>{title}</b>\n\nЗа сегодня ничего нового не нашлось."
-    lines = [f"<b>{title}</b> — {len(items)}\n"]
-    for i, facts in enumerate(items, 1):
-        rooms = f"{facts['rooms']:g} комн" if facts.get("rooms") else "? комн"
-        price = f"{facts['price']:,}".replace(",", " ") + " ₪" if facts.get("price") else "цена ?"
-        mamad = "мамад" if facts.get("mamad") == "yes" else (
-            "мамад?" if facts.get("mamad_evidence") else "")
-        url = facts.get("url") or ""
-        head = f"{i}. {price} · {rooms} · {escape(_address(facts))}"
-        if mamad:
-            head += f" · {mamad}"
-        lines.append(f'<a href="{escape(url)}">{head}</a>' if url else head)
+        return f"<b>{title}</b>\n\nСегодня ничего нового не нашлось."
+    total = total if total is not None else len(items)
+    lines = [f"<b>{title}: {total}</b>", ""]
+    for facts in items:
+        line = digest_line(facts)
+        url = facts.get("url")
+        lines.append(f"• <a href=\"{escape(url)}\">{line}</a>" if url else f"• {line}")
+    if total > len(items):
+        lines.append("")
+        lines.append(f"<i>Ещё {total - len(items)} — /feed</i>")
     return "\n".join(lines)
