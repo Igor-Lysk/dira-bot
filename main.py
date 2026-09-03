@@ -139,6 +139,37 @@ async def main():
     async def job_yad2():
         await _collect_board("yad2", yad2.collect)
 
+    _memory_warned = {"at": None}
+
+    async def job_memory():
+        """Предупредить администратора, пока память ещё есть.
+
+        В контейнере /proc/meminfo показывает память хоста — это то, что нам и
+        нужно: важно не сколько занял бот, а сколько осталось соседям."""
+        try:
+            with open("/proc/meminfo") as f:
+                available = next(int(line.split()[1]) for line in f
+                                 if line.startswith("MemAvailable"))
+        except Exception:                             # noqa: BLE001
+            return
+        free_mb = available // 1024
+        if free_mb >= settings.MEMORY_WARN_MB:
+            _memory_warned["at"] = None
+            return
+        today = datetime.now().date()
+        if _memory_warned["at"] == today:             # не чаще раза в сутки
+            return
+        _memory_warned["at"] = today
+        for admin in await store.admins():
+            try:
+                await bot.send_message(
+                    admin, f"На сервере осталось {free_mb} МБ свободной памяти "
+                           f"(порог {settings.MEMORY_WARN_MB}). Стоит посмотреть, "
+                           f"что её ест: `docker stats`.")
+            except Exception as e:                    # noqa: BLE001
+                log.warning("предупреждение о памяти не ушло: %s", e)
+        log.warning("мало памяти: %d МБ", free_mb)
+
     async def job_healthcheck():
         # Пинг гасится, если Telethon нездоров: тогда healthchecks.io сам
         # пришлёт алерт. Молчание бота должно быть заметно снаружи.
@@ -166,6 +197,7 @@ async def main():
         (job_deliver, settings.DELIVERY_INTERVAL_MIN, "deliver", 150),
         (job_retry, settings.RETRY_INTERVAL_MIN, "retry", 600),
         (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck", 30),
+        (job_memory, settings.MEMORY_CHECK_INTERVAL_MIN, "memory", 45),
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
     ) + ((

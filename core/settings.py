@@ -43,6 +43,11 @@ SCRAPINGBEE_KEY = os.getenv("SCRAPINGBEE_KEY", "")
 HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
 HEALTHCHECK_INTERVAL_MIN = 10
 
+# Если на машине остаётся меньше этого, пишем администратору. Сервер общий и
+# памяти на нём около гигабайта: тихий OOM убьёт не только нас.
+MEMORY_WARN_MB = 300
+MEMORY_CHECK_INTERVAL_MIN = 30
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 TIMEZONE = "Asia/Jerusalem"
 

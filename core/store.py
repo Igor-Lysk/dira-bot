@@ -74,6 +74,15 @@ class Store:
         cur = await self._db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
         return _row(await cur.fetchone())
 
+    async def admins(self) -> list:
+        """Кому идут служебные сообщения: о нехватке памяти, о сбоях сбора.
+
+        Обычным пользователям это знать незачем — их волнует лента, а не то,
+        сколько на сервере свободно."""
+        cur = await self._db.execute(
+            "SELECT telegram_id FROM users WHERE is_admin=1 AND is_active=1")
+        return [r[0] for r in await cur.fetchall()]
+
     async def get_user(self, telegram_id: int) -> Optional[dict]:
         cur = await self._db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
         return _row(await cur.fetchone())
