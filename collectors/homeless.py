@@ -79,9 +79,15 @@ def _to_raw(ad_id: str, cells: list, city_name: str) -> Optional[dict]:
     rooms = float(middle[0]) if middle else None
     floor = float(middle[1]) if len(middle) > 1 else None
 
-    # сразу за ценой — дата въезда, последняя дата в строке — дата публикации
+    # сразу за ценой — дата въезда, последняя дата в строке — дата публикации.
+    # Приводим её к ISO: в таблице она в виде 02/09/2026, а в таком виде даты
+    # не сравниваются ни в SQL, ни между источниками.
     entry = cells[price_at + 1] if price_at + 1 < len(cells) else ""
-    posted = next((c for c in reversed(cells) if _DATE_CELL_RE.match(c)), None)
+    posted_raw = next((c for c in reversed(cells) if _DATE_CELL_RE.match(c)), None)
+    posted = None
+    if posted_raw:
+        d, m, y = posted_raw.split("/")
+        posted = f"{y}-{m}-{d}"
 
     district, street = cells[COL_DISTRICT], cells[COL_STREET]
 

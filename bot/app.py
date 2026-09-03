@@ -298,7 +298,7 @@ async def _send_feed(target, store: Store, profile: dict, order: str, offset: in
     # это первое, на что смотрят, решая, открывать ли объявление
     own = await market_mod.medians(store)
     for facts in rows:
-        await send(cards.card(facts, own_medians=own), parse_mode=ParseMode.HTML,
+        await send(cards.card(facts, own_medians=own, show_age=True), parse_mode=ParseMode.HTML,
                    disable_web_page_preview=True, reply_markup=_card_kb(facts["listing_id"]))
     await send("Сортировка и фильтры:", reply_markup=_feed_kb(order, flt, offset, more))
 

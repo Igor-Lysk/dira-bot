@@ -10,6 +10,7 @@
 человеку: скрыть, отметить статус, сообщить об ошибке в данных.
 """
 
+from datetime import date, datetime
 from html import escape
 
 from core import market as market_mod
@@ -66,8 +67,21 @@ def _entry(facts: dict) -> str:
     return "въезд сразу" if value == "now" else f"въезд {value}"
 
 
+def _age_days(facts: dict):
+    """Сколько дней объявление висит. По дате публикации, иначе по нашей находке."""
+    raw = facts.get("posted_at") or facts.get("collected_at")
+    if not raw:
+        return None
+    try:
+        seen = datetime.fromisoformat(str(raw)[:19].replace(" ", "T")).date()
+    except ValueError:
+        return None
+    return (date.today() - seen).days
+
+
 def card(facts: dict, rank: float = None, reasons: list = None,
-         price_history: list = None, own_medians: dict = None) -> str:
+         price_history: list = None, own_medians: dict = None,
+         show_age: bool = False) -> str:
     """Короткая карточка. HTML-разметка Telegram."""
     rooms = facts.get("rooms")
     floor = facts.get("floor")
@@ -92,6 +106,15 @@ def card(facts: dict, rank: float = None, reasons: list = None,
 
     head.append(_mamad(facts))
     head.append(_entry(facts))
+
+    # Возраст показываем только в ленте: в дайджесте это всегда «за сутки», а в
+    # мгновенной выдаче — «только что», и строка занимала бы место впустую.
+    # А вот при листании накопленного разница между «сегодня» и «шестой день»
+    # решает, звонить сейчас или это давно снято.
+    if show_age:
+        days = _age_days(facts)
+        if days is not None and days >= 2:
+            head.append(f"висит {days} дн.")
 
     # История цены появляется, только когда объявление публиковали повторно.
     # Падающая цена — сигнал к торгу, поэтому она в карточке, а не в деталях.

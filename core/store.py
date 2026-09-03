@@ -208,7 +208,9 @@ class Store:
             "SELECT m.rank, m.reasons, l.*, f.* FROM matches m"
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
-            " WHERE m.profile_id=? AND m.state='new' ORDER BY m.rank DESC LIMIT ?",
+            " WHERE m.profile_id=? AND m.state='new'"
+            f"   AND COALESCE(l.posted_at, l.collected_at) >= date('now', '-{self.MAX_AGE_DAYS} days')"
+            " ORDER BY m.rank DESC LIMIT ?",
             (profile_id, limit))
         return _rows(await cur.fetchall())
 
@@ -217,6 +219,13 @@ class Store:
     # пусто» при 129 подобранных объявлениях, ждущих утреннего дайджеста —
     # первое, что вылезло при живой проверке бота.
     FEED_STATES = ("new", "sent", "saved", "contacted", "waiting", "visit")
+
+    # Объявления старше этого срока в ленту не идут. Нужно прежде всего новому
+    # пользователю: без отсечения его первая лента — это сотни объявлений, из
+    # которых половина снята месяц назад. В базе нашлось объявление от августа
+    # прошлого года. Считаем от даты публикации, а где её нет — от момента,
+    # когда мы объявление увидели.
+    MAX_AGE_DAYS = 7
 
     async def feed(self, profile_id: int, order: str = "rank", limit: int = 5,
                    offset: int = 0, states: tuple = FEED_STATES,
@@ -234,6 +243,8 @@ class Store:
             "sqm_price": "f.price IS NULL OR f.area_sqm IS NULL, "
                          "CAST(f.price AS REAL) / NULLIF(f.area_sqm, 0) ASC",
         }
+        age = (f" AND COALESCE(l.posted_at, l.collected_at) >= "
+               f"date('now', '-{self.MAX_AGE_DAYS} days')")
         filters = {
             "all": "",
             "mamad": " AND (f.mamad = 'yes' OR f.mamad_evidence IS NOT NULL)",
@@ -246,7 +257,7 @@ class Store:
             f" JOIN listings l ON l.id = m.listing_id"
             f" LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             f" WHERE m.profile_id=? AND m.state IN ({placeholders})"
-            f"{filters.get(flt, '')}"
+            f"{age}{filters.get(flt, '')}"
             f" ORDER BY {orders.get(order, orders['rank'])} LIMIT ? OFFSET ?",
             (profile_id, *states, limit, offset))
         return _rows(await cur.fetchall())
