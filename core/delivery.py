@@ -19,6 +19,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bot import cards
+from core import market as market_mod
 from core.store import Store
 
 log = logging.getLogger(__name__)
@@ -42,9 +43,10 @@ def in_quiet_hours(profile: dict, now: datetime = None) -> bool:
 
 
 async def _send_card(bot, chat_id: int, facts: dict, rank=None, reasons=None,
-                     history=None, prefix: str = ""):
+                     history=None, prefix: str = "", own_medians=None):
     from bot.app import _card_kb
-    text = cards.card(facts, rank=rank, reasons=reasons, price_history=history)
+    text = cards.card(facts, rank=rank, reasons=reasons, price_history=history,
+                      own_medians=own_medians)
     if prefix:
         text = prefix + "\n" + text
     await bot.send_message(chat_id, text, parse_mode="HTML",
@@ -78,7 +80,8 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
             prefix = "🔁 <b>Снова в продаже</b>"
         try:
             await _send_card(bot, profile["user_id"], facts, rank=facts.get("rank"),
-                             reasons=facts.get("reasons"), history=history, prefix=prefix)
+                             reasons=facts.get("reasons"), history=history, prefix=prefix,
+                             own_medians=await market_mod.medians(store))
             sent.append(facts["listing_id"])
         except Exception as e:                       # noqa: BLE001
             log.warning("не отправилось %s: %s", facts["listing_id"], e)
@@ -115,7 +118,9 @@ async def deliver_digest(bot, store: Store, profile: dict, force: bool = False) 
         await store.update_profile(profile["id"], digest_sent_on=today)
         return 0
 
-    await bot.send_message(profile["user_id"], cards.digest(queue, total=total),
+    own = await market_mod.medians(store)
+    await bot.send_message(profile["user_id"],
+                           cards.digest(queue, total=total, own_medians=own),
                            parse_mode="HTML", disable_web_page_preview=True)
     await store.mark_sent(profile["id"], [f["listing_id"] for f in queue])
     await store.update_profile(profile["id"], digest_sent_on=today)

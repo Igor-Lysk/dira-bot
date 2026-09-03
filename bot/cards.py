@@ -12,6 +12,8 @@
 
 from html import escape
 
+from core import market as market_mod
+
 TRI = {"yes": "есть", "no": "нет", None: "нет данных"}
 
 STATES = [
@@ -65,7 +67,7 @@ def _entry(facts: dict) -> str:
 
 
 def card(facts: dict, rank: float = None, reasons: list = None,
-         price_history: list = None) -> str:
+         price_history: list = None, own_medians: dict = None) -> str:
     """Короткая карточка. HTML-разметка Telegram."""
     rooms = facts.get("rooms")
     floor = facts.get("floor")
@@ -81,6 +83,12 @@ def card(facts: dict, rank: float = None, reasons: list = None,
         line.append(f"этаж {floor}" + (f" из {total}" if total else ""))
     if line:
         head.append(" · ".join(line))
+
+    if own_medians is not None:
+        assessment = market_mod.assess(facts, own_medians)
+        label = market_mod.describe(assessment)
+        if assessment and assessment["verdict"] != "market":
+            head.append(f"{label} (медиана по району {assessment['expected']} ₪)")
 
     head.append(_mamad(facts))
     head.append(_entry(facts))
@@ -129,7 +137,7 @@ def details(facts: dict) -> str:
     return "\n".join(f"{name}: {value}" for name, value in rows)
 
 
-def digest_line(facts: dict) -> str:
+def digest_line(facts: dict, own_medians: dict = None) -> str:
     """Одна строка дайджеста. Всё, что помещается на экран телефона, и ничего сверх."""
     # цену собираем отдельно от карточки: в строке дайджеста не нужны ни «/мес»,
     # ни цена за метр — она удлиняет строку и на телефоне переносится
@@ -144,10 +152,19 @@ def digest_line(facts: dict) -> str:
         parts.append("мамад")
     elif facts.get("mamad_evidence"):
         parts.append("мамад?")
+    # Отношение к рынку — единственная оценка в строке. «Дешевле рынка» это
+    # повод открыть, «подозрительно дёшево» — повод не тратить время.
+    if own_medians is not None:
+        assessment = market_mod.assess(facts, own_medians)
+        if assessment and assessment["verdict"] == "cheap":
+            parts.append(f"−{abs(assessment['diff_pct'])}% к рынку")
+        elif assessment and assessment["verdict"] == "suspicious":
+            parts.append("подозрительно дёшево")
     return " · ".join(escape(str(p)) for p in parts if p)
 
 
-def digest(items: list, total: int = None, title: str = "Новое за сутки") -> str:
+def digest(items: list, total: int = None, title: str = "Новое за сутки",
+           own_medians: dict = None) -> str:
     """Компактный список: строка на объявление, вся строка — ссылка.
 
     Формат выбран под чтение с телефона: без карточек, без таблиц, без
@@ -159,7 +176,7 @@ def digest(items: list, total: int = None, title: str = "Новое за сут�
     total = total if total is not None else len(items)
     lines = [f"<b>{title}: {total}</b>", ""]
     for facts in items:
-        line = digest_line(facts)
+        line = digest_line(facts, own_medians)
         url = facts.get("url")
         lines.append(f"• <a href=\"{escape(url)}\">{line}</a>" if url else f"• {line}")
     if total > len(items):

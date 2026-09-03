@@ -20,6 +20,7 @@ import logging
 import re
 from typing import Optional
 
+from core import market as market_mod
 from core.match import match
 from core.sources import region_of
 from core.store import Store
@@ -190,9 +191,11 @@ async def match_listing(store: Store, lid: str) -> int:
     facts = await store.get_facts(lid)
     if not facts:
         return 0
+    own = await market_mod.medians(store)          # кэшируется на час
+    assessment = market_mod.assess(facts, own)
     created = 0
     for profile in await store.active_profiles():
-        result = match(facts, profile)
+        result = match(facts, profile, market=assessment)
         if result.matched:
             if await store.add_match(profile["id"], lid, result.rank, result.reasons):
                 created += 1
@@ -214,12 +217,13 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
         "SELECT id FROM listings WHERE collected_at >= datetime('now', ?)"
         " ORDER BY collected_at DESC LIMIT ?", (f"-{days} days", limit))
     ids = [r[0] for r in await cur.fetchall()]
+    own = await market_mod.medians(store)
     created = 0
     for lid in ids:
         facts = await store.get_facts(lid)
         if not facts:
             continue
-        result = match(facts, profile)
+        result = match(facts, profile, market=market_mod.assess(facts, own))
         if result.matched:
             if await store.add_match(profile_id, lid, result.rank, result.reasons):
                 created += 1

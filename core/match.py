@@ -56,10 +56,11 @@ def _feature_ok(value, mode) -> bool:
     return True
 
 
-def match(facts: dict, profile: dict) -> MatchResult:
+def match(facts: dict, profile: dict, market: dict = None) -> MatchResult:
     """Подходит ли объявление профилю, и насколько.
 
     facts — строка listing_facts как словарь. profile — строка search_profiles.
+    market — оценка цены относительно рынка из `core.market.assess`, если есть.
     """
     # ── жёсткие правила ──────────────────────────────────────────────────────
     deal = facts.get("deal_type")
@@ -134,20 +135,27 @@ def match(facts: dict, profile: dict) -> MatchResult:
     # ── ранг ─────────────────────────────────────────────────────────────────
     reasons = []
 
-    # Запас по бюджету. Считаем от идеальной цены, если она задана: иначе самое
-    # дешёвое всегда наверху, а самое дешёвое — обычно ошибка разбора либо
-    # комната с соседями. Это не догадка, а наблюдение с первого сквозного прогона.
+    # Запас по бюджету — от желаемой цены, а не от потолка.
     ideal = profile.get("price_ideal") or price_max
     if price is not None and ideal:
         if price <= ideal:
             reasons.append(("в бюджете", 2.0))
-            if price_max and price_max > ideal:
-                # чем ниже идеальной, тем лучше, но с насыщением
-                margin = min(1.0, (ideal - price) / max(ideal * 0.25, 1))
-                reasons.append(("заметно дешевле желаемого", round(margin, 2)))
         else:
             over = (price - ideal) / max(ideal, 1)
             reasons.append(("дороже желаемого", -round(min(2.0, over * 4), 2)))
+
+    # Дешевизна сама по себе — не достоинство. Сравниваем с рынком: цена ниже
+    # медианы по городу и числу комнат на 15–45% это хорошая находка, а вдвое
+    # ниже рынка — почти всегда мусорное объявление. До этой поправки наверх
+    # дайджеста выходили четырёхкомнатные в Рамат-Гане за 2 716 ₪ при медиане
+    # 6 500, и объяснение ранга у них было такое же, как у настоящих находок.
+    if market:
+        if market["verdict"] == "suspicious":
+            reasons.append((f"подозрительно дёшево для района ({market['ratio']} от медианы)", -3.0))
+        elif market["verdict"] == "cheap":
+            reasons.append((f"дешевле рынка на {abs(market['diff_pct'])}%", 1.2))
+        elif market["verdict"] == "expensive":
+            reasons.append((f"дороже рынка на {market['diff_pct']}%", -0.5))
 
     if facts.get("mamad") == "yes":
         reasons.append(("мамад подтверждён", 2.0))
