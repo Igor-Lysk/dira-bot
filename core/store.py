@@ -34,6 +34,12 @@ def _rows(rows) -> list:
     return [_row(r) for r in rows]
 
 
+def _presence_sql() -> str:
+    """Источники, у которых свежесть определяется присутствием в выдаче."""
+    from core.sources import PRESENCE_SOURCES
+    return ",".join(f"'{name}'" for name in PRESENCE_SOURCES) or "''"
+
+
 def _dump(value: Any) -> Any:
     return json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value
 
@@ -153,6 +159,30 @@ class Store:
         await self._db.commit()
         return True
 
+    async def mark_seen(self, source: str, source_ids: list) -> dict:
+        """Отметить, какие объявления источника есть в свежем скане.
+
+        Увиденные обнуляют счётчик промахов, невидимые его увеличивают. После
+        трёх промахов подряд объявление перестаёт попадать в выдачу — но
+        остаётся в базе: история цен и медианы по району от этого выигрывают.
+        """
+        if not source_ids:
+            return {"seen": 0, "missed": 0}
+        placeholders = ",".join("?" * len(source_ids))
+        await self._db.execute(
+            f"UPDATE listings SET last_seen_at = datetime('now'), missed_scans = 0"
+            f" WHERE source = ? AND source_id IN ({placeholders})",
+            (source, *source_ids))
+        cur = await self._db.execute(
+            f"UPDATE listings SET missed_scans = missed_scans + 1"
+            f" WHERE source = ? AND source_id NOT IN ({placeholders})",
+            (source, *source_ids))
+        await self._db.commit()
+        gone = await self._db.execute(
+            "SELECT COUNT(*) FROM listings WHERE source = ? AND missed_scans >= ?",
+            (source, 3))
+        return {"seen": len(source_ids), "hidden": (await gone.fetchone())[0]}
+
     async def set_status(self, listing_id: str, status: str, error: str = None):
         """Пометить состояние обработки.
 
@@ -218,7 +248,10 @@ class Store:
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             " WHERE m.profile_id=? AND m.state='new'"
-            f"   AND COALESCE(l.posted_at, l.collected_at) >= date('now', '-{self.MAX_AGE_DAYS} days')"
+            f"   AND ((l.source IN ({_presence_sql()}) AND l.missed_scans < 3)"
+            f"     OR (l.source NOT IN ({_presence_sql()})"
+            f"         AND COALESCE(l.posted_at, l.collected_at) >="
+            f"             date('now', '-{self.MAX_AGE_DAYS} days')))"
             " ORDER BY m.rank DESC LIMIT ?",
             (profile_id, limit))
         return _rows(await cur.fetchall())
@@ -252,8 +285,14 @@ class Store:
             "sqm_price": "f.price IS NULL OR f.area_sqm IS NULL, "
                          "CAST(f.price AS REAL) / NULLIF(f.area_sqm, 0) ASC",
         }
-        age = (f" AND COALESCE(l.posted_at, l.collected_at) >= "
-               f"date('now', '-{self.MAX_AGE_DAYS} days')")
+        # Свежесть считается по-разному: где доску видно целиком, объявление
+        # живо, пока оно в выдаче; где нет — по дате (решение 0005).
+        from core.sources import MISSED_SCANS_TO_HIDE, PRESENCE_SOURCES
+        presence = ",".join(f"'{s}'" for s in PRESENCE_SOURCES) or "''"
+        age = (f" AND ((l.source IN ({presence}) AND l.missed_scans < {MISSED_SCANS_TO_HIDE})"
+               f"   OR (l.source NOT IN ({presence})"
+               f"       AND COALESCE(l.posted_at, l.collected_at) >= "
+               f"           date('now', '-{self.MAX_AGE_DAYS} days')))")
         filters = {
             "all": "",
             "mamad": " AND (f.mamad = 'yes' OR f.mamad_evidence IS NOT NULL)",

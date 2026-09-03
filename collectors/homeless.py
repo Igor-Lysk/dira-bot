@@ -125,29 +125,50 @@ def _to_raw(ad_id: str, cells: list, city_name: str) -> Optional[dict]:
     }
 
 
+MAX_PAGES = 12          # доска по городу укладывается в 3-7 страниц
+
+
 async def collect(cities: list) -> list:
-    """Собрать объявления по нужным городам. Пустой список городов — ничего не делаем."""
+    """Собрать объявления по нужным городам — всю доску, а не первую страницу.
+
+    Первая страница отдаёт 45 самых свежих, а по Тель-Авиву доска — 221
+    объявление на семи страницах. Разница не только в охвате: пока мы видели
+    верхушку, «объявление пропало из выдачи» означало всего лишь «его вытеснили
+    новые», и на этом нельзя было строить признак снятого объявления.
+
+    Идём по страницам, пока появляются новые идентификаторы.
+    """
     targets = source_cities(cities, "homeless")
     if not targets:
         return []
 
-    results = []
+    results, seen = [], set()
     async with httpx.AsyncClient(timeout=45, follow_redirects=True,
                                  headers={"User-Agent": UA}) as client:
         for name, hebrew in targets:
-            url = f"{BASE}/rent/city=" + urllib.parse.quote(hebrew)
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-            except Exception as e:                    # noqa: BLE001
-                log.warning("homeless %s: %s", name, e)
-                continue
-            found = 0
-            for ad_id, body in _ROW_RE.findall(response.text):
-                cells = [_text(c) for c in _CELL_RE.findall(body)]
-                raw = _to_raw(ad_id, cells, name)
-                if raw:
-                    results.append(raw)
-                    found += 1
-            log.info("homeless %s: %d объявлений", name, found)
+            base = f"{BASE}/rent/city=" + urllib.parse.quote(hebrew)
+            found, pages = 0, 0
+            for page in range(1, MAX_PAGES + 1):
+                url = base if page == 1 else f"{base}/{page}"
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                except Exception as e:                # noqa: BLE001
+                    log.warning("homeless %s стр. %d: %s", name, page, e)
+                    break
+                fresh = 0
+                for ad_id, body in _ROW_RE.findall(response.text):
+                    if ad_id in seen:
+                        continue
+                    seen.add(ad_id)
+                    cells = [_text(c) for c in _CELL_RE.findall(body)]
+                    raw = _to_raw(ad_id, cells, name)
+                    if raw:
+                        results.append(raw)
+                        found += 1
+                        fresh += 1
+                pages = page
+                if fresh == 0:                        # страница не дала нового — дальше пусто
+                    break
+            log.info("homeless %s: %d объявлений на %d стр.", name, found, pages)
     return results

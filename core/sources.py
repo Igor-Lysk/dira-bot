@@ -127,3 +127,20 @@ def city_from_hebrew(value: str, default: str = None) -> str:
         if hebrew and hebrew in value:
             return name
     return default
+
+
+# ── как понимать, что объявление ещё живо ───────────────────────────────────
+# Признак зависит от того, видим ли мы доску целиком (решение 0005).
+#
+#   presence — читаем всю доску, поэтому пропажа из выдачи означает снятие;
+#   date     — либо объявление не снимается никогда (Telegram), либо мы видим
+#              только верхушку и пропажа ничего не доказывает (Komo).
+FRESHNESS = {
+    "telegram": "date",
+    "homeless": "presence",     # проходим все страницы
+    "komo": "date",             # пагинация через AJAX, читаем только первую страницу
+    "yad2": "date",
+    "facebook": "date",
+}
+PRESENCE_SOURCES = tuple(k for k, v in FRESHNESS.items() if v == "presence")
+MISSED_SCANS_TO_HIDE = 3        # три промаха подряд, чтобы разовый сбой не выкосил ленту

@@ -127,8 +127,13 @@ async def main():
             if result["status"] == "new":
                 new += 1
                 matches += result.get("matches", 0)
-        if new:
-            log.info("%s: собрано %d, новых %d, совпадений %d", name, len(items), new, matches)
+        # отмечаем, что из ранее известного есть в этом скане: для досок,
+        # которые мы читаем целиком, пропажа означает снятое объявление
+        presence = await store.mark_seen(name, [i.get("source_id") for i in items
+                                                if i.get("source_id")])
+        if new or presence.get("hidden"):
+            log.info("%s: собрано %d, новых %d, совпадений %d, скрыто как снятые %s",
+                     name, len(items), new, matches, presence.get("hidden"))
 
     async def job_homeless():
         await _collect_board("homeless", homeless.collect)
