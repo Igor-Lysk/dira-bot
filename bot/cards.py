@@ -138,13 +138,29 @@ def details(facts: dict) -> str:
 
 
 def digest_line(facts: dict, own_medians: dict = None) -> str:
-    """Одна строка дайджеста. Всё, что помещается на экран телефона, и ничего сверх."""
-    # цену собираем отдельно от карточки: в строке дайджеста не нужны ни «/мес»,
-    # ни цена за метр — она удлиняет строку и на телефоне переносится
+    """Одна строка дайджеста. Всё, что помещается на экран телефона, и ничего сверх.
+
+    Порядок: цена · комнаты (отношение к рынку) · метраж · адрес · мамад.
+    Оценка стоит вплотную к комнатам, потому что она про цену именно за такую
+    квартиру: «3.5к (−38% к рынку)» читается как одно утверждение, а вынесенная
+    в конец строки оценка теряла связь с тем, к чему относится.
+    """
     price = facts.get("price")
     parts = [f"{price:,}".replace(",", " ") + " ₪" if price else "цена ?"]
-    if facts.get("rooms"):
-        parts.append(f"{facts['rooms']:g}к")
+
+    rooms = f"{facts['rooms']:g}к" if facts.get("rooms") else None
+    market_note = ""
+    if own_medians is not None:
+        assessment = market_mod.assess(facts, own_medians)
+        if assessment and assessment["verdict"] == "cheap":
+            market_note = f" (−{abs(assessment['diff_pct'])}% к рынку)"
+        elif assessment and assessment["verdict"] == "suspicious":
+            market_note = " (подозрительно дёшево)"
+    if rooms:
+        parts.append(rooms + market_note)
+    elif market_note:
+        parts.append(market_note.strip(" ()"))
+
     if facts.get("area_sqm"):
         parts.append(f"{facts['area_sqm']} м²")
     parts.append(_address(facts))
@@ -152,14 +168,6 @@ def digest_line(facts: dict, own_medians: dict = None) -> str:
         parts.append("мамад")
     elif facts.get("mamad_evidence"):
         parts.append("мамад?")
-    # Отношение к рынку — единственная оценка в строке. «Дешевле рынка» это
-    # повод открыть, «подозрительно дёшево» — повод не тратить время.
-    if own_medians is not None:
-        assessment = market_mod.assess(facts, own_medians)
-        if assessment and assessment["verdict"] == "cheap":
-            parts.append(f"−{abs(assessment['diff_pct'])}% к рынку")
-        elif assessment and assessment["verdict"] == "suspicious":
-            parts.append("подозрительно дёшево")
     return " · ".join(escape(str(p)) for p in parts if p)
 
 

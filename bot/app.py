@@ -20,6 +20,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message, TelegramObject)
 
 from bot import cards, wizard
+from core import market as market_mod
 from core.store import Store
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ router = Router()
 
 SORTS = [("rank", "по релевантности"), ("price", "по цене"), ("fresh", "по свежести"),
          ("rooms", "по комнатам"), ("sqm_price", "по цене за м²")]
+FILTERS = [("all", "все"), ("mamad", "с мамадом"), ("cheap", "дешевле рынка")]
 
 
 class AuthMiddleware(BaseMiddleware):
@@ -71,6 +73,8 @@ def _wizard_kb(q: dict) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="Готово", callback_data=f"w:{q['key']}:done")])
     if q["optional"] and q["kind"] != "multi":
         rows.append([InlineKeyboardButton(text="Пропустить", callback_data=f"w:{q['key']}:skip")])
+    if q.get("back"):
+        rows.append([InlineKeyboardButton(text="← Назад", callback_data=f"w:{q['key']}:__back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -85,18 +89,65 @@ def _card_kb(listing_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def _feed_kb(profile_id: int, order: str, offset: int, has_more: bool) -> InlineKeyboardMarkup:
+def _feed_kb(order: str, flt: str, offset: int, has_more: bool) -> InlineKeyboardMarkup:
+    """Сортировки, фильтры и «показать ещё». Текущий выбор помечен точкой."""
     rows, row = [], []
     for code, label in SORTS:
-        mark = "• " if code == order else ""
-        row.append(InlineKeyboardButton(text=mark + label, callback_data=f"f:{code}:0"))
+        row.append(InlineKeyboardButton(text=("• " if code == order else "") + label,
+                                        callback_data=f"f:{code}:{flt}:0"))
         if len(row) == 2:
             rows.append(row); row = []
     if row:
         rows.append(row)
+    rows.append([InlineKeyboardButton(text=("• " if code == flt else "") + label,
+                                      callback_data=f"f:{order}:{code}:0")
+                 for code, label in FILTERS])
     if has_more:
         rows.append([InlineKeyboardButton(text="Показать ещё",
-                                          callback_data=f"f:{order}:{offset + 5}")])
+                                          callback_data=f"f:{order}:{flt}:{offset + 5}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+
+# Поля, которые можно править по одному из /settings. Ключ — шаг визарда.
+EDITABLE = [
+    ("cities", "Города"), ("price_max", "Потолок цены"), ("price_ideal", "Желаемая цена"),
+    ("rooms_min", "Комнаты"), ("req_mamad", "Мамад"), ("req_elevator", "Лифт"),
+    ("req_pets", "Животные"), ("delivery_mode", "Как присылать"),
+    ("digest_hour", "Время дайджеста"), ("stop_words", "Стоп-слова"),
+]
+
+
+async def _save_single_field(target, user: dict, store: Store):
+    """Записать одно поле профиля и вернуться к настройкам.
+
+    Раньше поправить потолок цены значило пройти все десять шагов заново —
+    достаточно, чтобы человек этого не делал вовсе.
+    """
+    data = dict(user.get("onboarding_data") or {})
+    key = data.pop("_edit_only", None)
+    profiles = await store.profiles_of(user["telegram_id"])
+    if profiles and key:
+        fields = wizard.to_profile(data)
+        # пишем только то поле, которое правили, плюс связанное с ним
+        keep = {key} | ({"digest_hour"} if key == "delivery_mode" else set())
+        await store.update_profile(profiles[0]["id"],
+                                   **{k: v for k, v in fields.items() if k in keep})
+        from core.pipeline import rematch_profile
+        await rematch_profile(store, profiles[0]["id"])
+    await store.set_user(user["telegram_id"], onboarding_step="done", onboarding_data=data)
+    sender = target.answer if isinstance(target, Message) else target.message.answer
+    await sender("Сохранено. Ещё что-нибудь поправить — /settings")
+
+
+def _settings_kb() -> InlineKeyboardMarkup:
+    rows, row = [], []
+    for key, label in EDITABLE:
+        row.append(InlineKeyboardButton(text=label, callback_data=f"edit:{key}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -107,7 +158,11 @@ async def _ask(target, user: dict, store: Store):
     data = user.get("onboarding_data") or {}
     key = user.get("onboarding_step") or wizard.first_step()
     q = wizard.question(key, data)
-    text = f"<b>[{q['progress']}] {q['title']}</b>\n\n{q['text']}"
+    # в режиме правки одного поля ни прогресса, ни «назад» не нужно
+    editing = bool(data.get("_edit_only"))
+    q["back"] = not editing and wizard.step_before(key, data) is not None
+    head = q["title"] if editing else f"[{q['progress']}] {q['title']}"
+    text = f"<b>{head}</b>\n\n{q['text']}"
     if q["hint"]:
         text += f"\n\n<i>{q['hint']}</i>"
     sender = target.answer if isinstance(target, Message) else target.message.edit_text
@@ -168,6 +223,16 @@ async def cmd_setup(message: Message, user: dict, store: Store):
 async def on_wizard(callback: CallbackQuery, user: dict, store: Store):
     _, key, answer = callback.data.split(":", 2)
     data = user.get("onboarding_data") or {}
+
+    if answer == "__back":
+        previous = wizard.step_before(key, data)
+        if previous:
+            await store.set_user(user["telegram_id"], onboarding_step=previous)
+            user = await store.get_user(user["telegram_id"])
+        await callback.answer()
+        await _ask(callback, user, store)
+        return
+
     accepted, error = wizard.apply(key, data, answer)
     await store.set_user(user["telegram_id"], onboarding_data=data)
     if error:
@@ -178,7 +243,9 @@ async def on_wizard(callback: CallbackQuery, user: dict, store: Store):
         key = wizard.step_after(key, data)
         await store.set_user(user["telegram_id"], onboarding_step=key)
     user = await store.get_user(user["telegram_id"])
-    if key == wizard.DONE:
+    if (user.get("onboarding_data") or {}).get("_edit_only") and accepted:
+        await _save_single_field(callback, user, store)
+    elif key == wizard.DONE:
         await _finish(callback, user, store)
     else:
         await _ask(callback, user, store)
@@ -201,7 +268,9 @@ async def on_text(message: Message, user: dict, store: Store):
         key = wizard.step_after(key, data)
         await store.set_user(user["telegram_id"], onboarding_step=key)
     user = await store.get_user(user["telegram_id"])
-    if key == wizard.DONE:
+    if (user.get("onboarding_data") or {}).get("_edit_only") and accepted:
+        await _save_single_field(message, user, store)
+    elif key == wizard.DONE:
         await _finish(message, user, store)
     else:
         await _ask(message, user, store)
@@ -209,9 +278,11 @@ async def on_text(message: Message, user: dict, store: Store):
 
 # ── лента ────────────────────────────────────────────────────────────────────
 
-async def _send_feed(target, store: Store, profile: dict, order: str, offset: int):
-    rows = await store.feed(profile["id"], order=order, limit=5, offset=offset)
-    more = len(await store.feed(profile["id"], order=order, limit=1, offset=offset + 5)) > 0
+async def _send_feed(target, store: Store, profile: dict, order: str, offset: int,
+                     flt: str = "all"):
+    rows = await store.feed(profile["id"], order=order, limit=5, offset=offset, flt=flt)
+    more = len(await store.feed(profile["id"], order=order, limit=1,
+                                offset=offset + 5, flt=flt)) > 0
     if not rows:
         text = ("Пока пусто. Бот собирает объявления и пришлёт, как только "
                 "появится подходящее." if offset == 0 else "Дальше ничего нет.")
@@ -219,13 +290,17 @@ async def _send_feed(target, store: Store, profile: dict, order: str, offset: in
                else target.message.answer(text))
         return
     label = dict(SORTS).get(order, order)
-    header = f"<b>Найдено — {label}</b>"
+    flt_label = dict(FILTERS).get(flt, "")
+    header = f"<b>Найдено — {label}</b>" + (f" · {flt_label}" if flt != "all" else "")
     send = target.answer if isinstance(target, Message) else target.message.answer
     await send(header, parse_mode=ParseMode.HTML)
+    # оценку «дешевле рынка» показываем и в ленте, а не только в дайджесте:
+    # это первое, на что смотрят, решая, открывать ли объявление
+    own = await market_mod.medians(store)
     for facts in rows:
-        await send(cards.card(facts), parse_mode=ParseMode.HTML,
+        await send(cards.card(facts, own_medians=own), parse_mode=ParseMode.HTML,
                    disable_web_page_preview=True, reply_markup=_card_kb(facts["listing_id"]))
-    await send("Сортировка:", reply_markup=_feed_kb(profile["id"], order, offset, more))
+    await send("Сортировка и фильтры:", reply_markup=_feed_kb(order, flt, offset, more))
 
 
 @router.message(Command("feed"))
@@ -234,17 +309,21 @@ async def cmd_feed(message: Message, user: dict, store: Store):
     if not profiles:
         await message.answer("Сначала настроим критерии: /start")
         return
-    await _send_feed(message, store, profiles[0], "rank", 0)
+    p = profiles[0]
+    # порядок и фильтр берём те, что человек выбрал в прошлый раз
+    await _send_feed(message, store, p, p.get("feed_order") or "rank", 0,
+                     p.get("feed_filter") or "all")
 
 
 @router.callback_query(F.data.startswith("f:"))
 async def on_feed_page(callback: CallbackQuery, user: dict, store: Store):
-    _, order, offset = callback.data.split(":", 2)
+    _, order, flt, offset = callback.data.split(":", 3)
     profiles = await store.profiles_of(user["telegram_id"])
     if not profiles:
         await callback.answer("Сначала /start"); return
+    await store.update_profile(profiles[0]["id"], feed_order=order, feed_filter=flt)
     await callback.answer()
-    await _send_feed(callback, store, profiles[0], order, int(offset))
+    await _send_feed(callback, store, profiles[0], order, int(offset), flt)
 
 
 # ── действия на карточке ─────────────────────────────────────────────────────
@@ -297,8 +376,29 @@ async def cmd_settings(message: Message, user: dict, store: Store):
     state = "на паузе" if p["is_paused"] else "работает"
     await message.answer(
         f"<b>Критерии поиска</b> ({state})\n\n{wizard.summary(data)}\n\n"
-        f"Изменить всё — /setup. Пауза — /pause, снять — /resume.",
-        parse_mode=ParseMode.HTML)
+        f"Что поправить? Всё сразу — /setup. Пауза — /pause, снять — /resume.",
+        parse_mode=ParseMode.HTML, reply_markup=_settings_kb())
+
+
+@router.callback_query(F.data.startswith("edit:"))
+async def on_edit_field(callback: CallbackQuery, user: dict, store: Store):
+    """Правка одного поля: подставляем текущие значения и открываем один шаг."""
+    key = callback.data.split(":", 1)[1]
+    profiles = await store.profiles_of(user["telegram_id"])
+    if not profiles:
+        await callback.answer("Сначала /start"); return
+    p = profiles[0]
+    data = {
+        "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
+        "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
+        "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
+        "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
+        "stop_words": p["stop_words"], "_edit_only": key,
+    }
+    await store.set_user(user["telegram_id"], onboarding_step=key, onboarding_data=data)
+    user = await store.get_user(user["telegram_id"])
+    await callback.answer()
+    await _ask(callback, user, store)
 
 
 @router.message(Command("pause"))

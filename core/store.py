@@ -219,8 +219,13 @@ class Store:
     FEED_STATES = ("new", "sent", "saved", "contacted", "waiting", "visit")
 
     async def feed(self, profile_id: int, order: str = "rank", limit: int = 5,
-                   offset: int = 0, states: tuple = FEED_STATES) -> list:
-        """Лента с сортировкой. Порядок выбирает пользователь и он запоминается."""
+                   offset: int = 0, states: tuple = FEED_STATES,
+                   flt: str = "all") -> list:
+        """Лента с сортировкой и быстрым фильтром.
+
+        Фильтры намеренно простые и их три: они должны отвечать на вопросы,
+        которые возникают при листании («а где с мамадом?»), а не заменять
+        настройку профиля."""
         orders = {
             "rank": "m.rank DESC",
             "price": "f.price IS NULL, f.price ASC",
@@ -229,12 +234,19 @@ class Store:
             "sqm_price": "f.price IS NULL OR f.area_sqm IS NULL, "
                          "CAST(f.price AS REAL) / NULLIF(f.area_sqm, 0) ASC",
         }
+        filters = {
+            "all": "",
+            "mamad": " AND (f.mamad = 'yes' OR f.mamad_evidence IS NOT NULL)",
+            "cheap": " AND m.rank > 2.5",
+            "photo": " AND l.media IS NOT NULL AND l.media <> '[]'",
+        }
         placeholders = ",".join("?" * len(states))
         cur = await self._db.execute(
             f"SELECT m.rank, m.state, l.*, f.* FROM matches m"
             f" JOIN listings l ON l.id = m.listing_id"
             f" LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             f" WHERE m.profile_id=? AND m.state IN ({placeholders})"
+            f"{filters.get(flt, '')}"
             f" ORDER BY {orders.get(order, orders['rank'])} LIMIT ? OFFSET ?",
             (profile_id, *states, limit, offset))
         return _rows(await cur.fetchall())

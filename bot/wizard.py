@@ -155,6 +155,19 @@ def first_step() -> str:
     return STEPS[0]["key"]
 
 
+def step_before(key: str, data: dict) -> Optional[str]:
+    """Предыдущий видимый шаг. None — если это первый.
+
+    Нужен для кнопки «назад»: без неё опечатка на третьем шаге означала
+    пройти визард заново.
+    """
+    visible = [step["key"] for step in STEPS if _visible(step, data)]
+    if key not in visible:
+        return None
+    index = visible.index(key)
+    return visible[index - 1] if index > 0 else None
+
+
 def step_after(key: str, data: dict) -> str:
     """Следующий видимый шаг. Пропускает те, чьё условие не выполнено."""
     start = STEP_INDEX.get(key, -1) + 1
