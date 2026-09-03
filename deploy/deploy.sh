@@ -41,7 +41,7 @@ cd "$RUN"
 log "сборка и запуск"
 docker compose up -d --build 2>&1 | tail -2
 
-sleep 12
+sleep 8
 if ! docker ps --format '{{.Names}}' | grep -qx dira-bot; then
     log "КОНТЕЙНЕР НЕ ПОДНЯЛСЯ — откатываюсь"
     cd "$SRC" && git reset --hard --quiet "$PREVIOUS"
@@ -49,10 +49,16 @@ if ! docker ps --format '{{.Names}}' | grep -qx dira-bot; then
     exit 1
 fi
 
-# Проверяем не «процесс жив», а что бот действительно доработал до готовности:
-# контейнер может стоять и падать в цикле, и docker ps этого не покажет.
-if docker logs --since 2m dira-bot 2>&1 | grep -q "планировщик запущен"; then
-    log "готово, версия $CURRENT"
-else
-    log "внимание: в логах нет строки о запуске планировщика, проверь docker logs dira-bot"
-fi
+# Проверяем не «процесс жив», а что бот доработал до готовности: контейнер
+# может стоять и падать в цикле, и docker ps этого не покажет. Ждём строку, а
+# не смотрим один раз — после сборки старт занимает то пять секунд, то тридцать,
+# и разовая проверка ложно пугала «планировщик не запустился».
+for _ in $(seq 1 12); do
+    if docker logs --since 3m dira-bot 2>&1 | grep -q "планировщик запущен"; then
+        log "готово, версия $CURRENT"
+        exit 0
+    fi
+    sleep 5
+done
+log "внимание: за минуту планировщик не запустился, смотри docker logs dira-bot"
+exit 1
