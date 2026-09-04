@@ -263,7 +263,8 @@ class Store:
         await self._db.commit()
         return True
 
-    async def queue_for(self, profile_id: int, limit: int = 50) -> list:
+    async def queue_for(self, profile_id: int, limit: int = 50,
+                        since: str = None) -> list:
         """Что ещё не отправлено этому профилю, по убыванию ранга.
 
         Свежесть считается тем же выражением, что и в ленте: у части источников
@@ -272,6 +273,10 @@ class Store:
         версии, из-за которого запрос был синтаксически неверным и очередь
         падала целиком. Незаметно это оставалось, пока доставка шла дайджестом
         раз в сутки.
+
+        `since` отсекает накопленное до настройки профиля: это материал для
+        ленты, а не повод для уведомления. Без отсечки первый же день съел весь
+        дневной лимит на двухстах старых совпадениях.
         """
         cur = await self._db.execute(
             "SELECT m.rank, m.reasons, l.*, f.* FROM matches m"
@@ -279,8 +284,9 @@ class Store:
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             " WHERE m.profile_id=? AND m.state='new'"
             + _freshness_sql("l") +
+            (" AND l.collected_at > ?" if since else "") +
             " ORDER BY m.rank DESC LIMIT ?",
-            (profile_id, limit))
+            ([profile_id] + ([since] if since else []) + [limit]))
         return _rows(await cur.fetchall())
 
     # `new` входит в ленту наравне с отправленным: человек спрашивает «что

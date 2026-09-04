@@ -10,6 +10,11 @@
   Для тех, кто хочет написать хозяину первым.
 * **digest** — копится и уходит одним сообщением в выбранный час.
 
+Обе доставки шлют только то, что появилось после настройки профиля. Найденное
+до неё человек уже видел числом в конце визарда и листает в /feed; иначе первое
+же утро уходит на разбор двухсот накопленных объявлений, а живой поток стоит в
+очереди за ними.
+
 Тихие часы не отменяют находку, а откладывают её: то, что пришло ночью, уйдёт
 утром, а не пропадёт. Уйдёт при этом одним списком — иначе тихие часы просто
 переносили бы флуд на восемь утра.
@@ -67,11 +72,26 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
     cap = profile.get("max_per_day") or 20
     already = await store.sent_today(profile["id"])
     room = max(0, cap - already)
+    since = profile.get("backlog_before")
+
     if room == 0:
         log.info("профиль %s: дневной лимит %s исчерпан", profile["id"], cap)
+        # Молчание после исчерпанного лимита неотличимо от поломки: в первый же
+        # день лимит выбрался за минуту, и дальше одиннадцать часов тишины
+        # выглядели как сломанная доставка. Одна строка в сутки, и только если
+        # что-то действительно осталось за бортом.
+        waiting = len(await store.queue_for(profile["id"], limit=cap + 1, since=since))
+        today = _now().date().isoformat()
+        if waiting and profile.get("cap_notice_on") != today:
+            await bot.send_message(
+                profile["user_id"],
+                f"Дневной лимит в {cap} сообщений исчерпан — "
+                f"ещё {waiting} подходящих ждут в /feed. "
+                f"Лимит меняется в /settings.")
+            await store.update_profile(profile["id"], cap_notice_on=today)
         return 0
 
-    queue = await store.queue_for(profile["id"], limit=min(room, BURST_LIMIT))
+    queue = await store.queue_for(profile["id"], limit=min(room, BURST_LIMIT), since=since)
     if not queue:
         return 0
 
@@ -86,7 +106,7 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
         # пачка сразу. Заголовок называет вещи как есть: «пока тебя не
         # беспокоили» в три часа дня выглядело бы враньём.
         after_quiet = profile.get("quiet_to") is not None and _now().hour == profile["quiet_to"]
-        total = len(await store.queue_for(profile["id"], limit=1000))
+        total = len(await store.queue_for(profile["id"], limit=1000, since=since))
         await bot.send_message(
             profile["user_id"],
             cards.digest(queue, total=total, own_medians=own,
@@ -133,8 +153,9 @@ async def deliver_digest(bot, store: Store, profile: dict, force: bool = False) 
         if profile.get("digest_sent_on") == today:
             return 0
 
-    queue = await store.queue_for(profile["id"], limit=DIGEST_LIMIT)
-    total = len(await store.queue_for(profile["id"], limit=1000))
+    since = profile.get("backlog_before")
+    queue = await store.queue_for(profile["id"], limit=DIGEST_LIMIT, since=since)
+    total = len(await store.queue_for(profile["id"], limit=1000, since=since))
     if not queue:
         # отметку ставим всё равно: пустой день — тоже отработанный день,
         # иначе следующая пятиминутка попробует снова

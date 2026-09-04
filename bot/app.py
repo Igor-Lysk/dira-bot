@@ -11,6 +11,7 @@
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -206,6 +207,10 @@ async def _finish(target, user: dict, store: Store):
         profile_id = profiles[0]["id"]
         await store.update_profile(profile_id, **fields)
     else:
+        # Граница накопленного: всё, что уже лежит в базе, уходит в /feed, а
+        # мгновенная доставка начинается с этой секунды. Иначе первое, что
+        # человек получает после настройки, — двести объявлений разом.
+        fields["backlog_before"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         profile_id = await store.create_profile(user["telegram_id"], "Основной", **fields)
     await store.set_user(user["telegram_id"], onboarding_step="done")
 
