@@ -417,16 +417,22 @@ async def mark_disputed(store: Store, listing_id: str, field: str) -> bool:
     row = await store.get_facts(listing_id)
     if not row:
         return False
-    columns = DISPUTED_FIELDS.get(field, [])
-    fresh = {k: row.get(k) for k in FACT_COLUMNS if k in row}
-    fresh["phones"] = row.get("phones") or []
-    fresh["schema_version"] = row.get("schema_version", 1)
-    for name in columns:
-        fresh[name] = None
-    # Слой сбрасываем всегда: даже жалоба «другое» должна вернуть объявление
-    # на второй круг, иначе кнопка снова окажется пустышкой.
-    fresh["source_layer"] = "rules"
-    await store.save_facts(listing_id, fresh)
+
+    # Разобрать заново — значит заново, а не «стереть». Правила прогоняются по
+    # текущему тексту: он мог подрасти описанием со страницы доски, и тогда
+    # ответ будет другим. Но если правила выдают ровно то же, на что человек
+    # пожаловался, доверять им больше нельзя — поле уходит пустым, и его
+    # спросят у модели.
+    rules_again = facts_to_row(extract(row.get("raw_text") or ""))
+    changes = {}
+    for name in DISPUTED_FIELDS.get(field, []):
+        again = rules_again.get(name)
+        changes[name] = again if again != row.get(name) else None
+    # Отметку о модели снимаем всегда: даже жалоба «другое» должна вернуть
+    # объявление на второй круг, иначе кнопка снова окажется пустышкой.
+    changes["llm_at"] = None
+    changes["source_layer"] = "rules"
+    await store.save_facts(listing_id, changes)
     await store.set_status(listing_id, "extracted")
     await match_listing(store, listing_id)
     return True
