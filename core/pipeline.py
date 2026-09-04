@@ -302,7 +302,7 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
         " ORDER BY collected_at DESC LIMIT ?", (f"-{days} days", limit))
     ids = [r[0] for r in await cur.fetchall()]
     own = await market_mod.medians(store)
-    created = 0
+    created = dropped = 0
     for lid in ids:
         facts = await store.get_facts(lid)
         if not facts:
@@ -311,8 +311,22 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
         if result.matched:
             if await store.add_match(profile_id, lid, result.rank, result.reasons):
                 created += 1
-    log.info("профиль %s: пересчёт по %d объявлениям, новых совпадений %d",
-             profile_id, len(ids), created)
+        else:
+            # Сужение критериев должно убирать лишнее, а не только добавлять
+            # новое. Иначе человек ставит потолок 5000, а в ленте остаются
+            # квартиры по 9000, подобранные под прежние настройки, — и решает,
+            # что фильтр не работает.
+            #
+            # Убираем только неотправленное: карточка, которую человек уже
+            # видел или отметил, принадлежит его истории, а не текущим
+            # критериям.
+            cur = await store._db.execute(
+                "DELETE FROM matches WHERE profile_id=? AND listing_id=? AND state='new'"
+                " AND sent_at IS NULL", (profile_id, lid))
+            dropped += cur.rowcount or 0
+    await store._db.commit()
+    log.info("профиль %s: пересчёт по %d объявлениям, новых совпадений %d, убрано %d",
+             profile_id, len(ids), created, dropped)
     return created
 
 
