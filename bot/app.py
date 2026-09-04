@@ -509,6 +509,18 @@ async def cmd_unblock(message: Message, user: dict, store: Store):
     await message.answer(f"Доступ для {target} открыт.")
 
 
+@router.message(Command("health"))
+async def cmd_health(message: Message, user: dict, store: Store):
+    """Показатели против ожиданий. Только для администратора."""
+    if not user.get("is_admin"):
+        return
+    from core import health, settings
+    checks = await health.collect(store, settings.DB_PATH)
+    bad = health.failures(checks)
+    head = "Всё сходится" if not bad else f"Не сходится: {len(bad)}"
+    await message.answer(f"<b>{head}</b>\n\n{health.report(checks)}", parse_mode=ParseMode.HTML)
+
+
 @router.message(Command("pause"))
 async def cmd_pause(message: Message, user: dict, store: Store):
     for p in await store.profiles_of(user["telegram_id"]):

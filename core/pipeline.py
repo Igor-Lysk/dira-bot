@@ -36,6 +36,13 @@ FACT_COLUMNS = [*VALUE_FIELDS, *BOOL_FIELDS, "mamad_evidence", "commission",
 # Насколько назад ищем прежнюю публикацию той же квартиры.
 REPOST_WINDOW_DAYS = 45
 
+# Сколько раз одно объявление вообще может попасть к модели за свою жизнь.
+# Второй предел поверх отметки llm_at и намеренно независимый от неё: отметка
+# может не проставиться из-за ошибки в любом из путей, счётчик — нет. Три, а не
+# один, потому что законные поводы спросить снова существуют: у объявления
+# появилось описание со страницы доски, человек пожаловался на данные.
+MAX_LLM_ATTEMPTS = 3
+
 # Насколько тексты должны совпадать, чтобы считать объявления одной квартирой.
 # Мера — доля общих слов (Жаккар).
 #
@@ -74,6 +81,10 @@ def listing_id(url: Optional[str], text: str, source_id: Optional[str] = None) -
         return hashlib.sha256(source_id.encode()).hexdigest()[:20]
     base = (url or "").split("?")[0].rstrip("/") or text[:500]
     return hashlib.sha256(base.encode()).hexdigest()[:20]
+
+
+def _now_utc() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def facts_to_row(facts) -> dict:
@@ -326,6 +337,38 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
     return {"fetched": len(rows), "filled": filled}
 
 
+def enrichment_can_help(facts: dict, profiles: list) -> Optional[str]:
+    """Причина, по которой это объявление не стоит отдавать модели.
+
+    None — стоит. Смысл в том, что дозаполнение платное и имеет ровно одну
+    цель: довести объявление до чьей-то ленты. Если оно уже отвергнуто всеми
+    профилями по признаку, который дозаполнением не меняется, — платить не за
+    что. Сорок два процента расходов ушло на два объявления, ни одно из которых
+    не могло подойти никому: саблет на пять ночей и предложение работы.
+
+    Проверяются только необратимые причины. Неизвестный город или отсутствующая
+    цена сюда не относятся: как раз их модель обычно и восстанавливает.
+    """
+    deal = facts.get("deal_type")
+    if deal == "sale":
+        return "продажа, а не аренда"
+    if deal == "shared" and all(p.get("exclude_shared", 1) for p in profiles):
+        return "комната с соседями, её никто не ищет"
+    if deal == "sublet" and all(p.get("exclude_sublet", 1) for p in profiles):
+        return "саблет, его никто не ищет"
+
+    price = facts.get("price")
+    ceilings = [p.get("price_max") for p in profiles if p.get("price_max")]
+    if price and ceilings and price > max(ceilings):
+        return f"цена {price} выше всех потолков"
+
+    rooms = facts.get("rooms")
+    minimums = [p.get("rooms_min") for p in profiles if p.get("rooms_min")]
+    if rooms and minimums and rooms < min(minimums):
+        return f"комнат {rooms:g} меньше всех минимумов"
+    return None
+
+
 async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> dict:
     """Дозаполнить факты моделью и пересчитать совпадения.
 
@@ -357,15 +400,22 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
         # повод спросить снова: текст объявления не меняется, и следующие
         # триста попыток дадут то же самое (решение 0011).
         " WHERE f.llm_at IS NULL AND f.source_layer <> 'source'"
-        " AND l.status = 'extracted'" + city_clause +
+        " AND l.status = 'extracted' AND l.junk_reason IS NULL"
+        f" AND f.llm_attempts < {MAX_LLM_ATTEMPTS}" + city_clause +
         " ORDER BY EXISTS (SELECT 1 FROM matches m WHERE m.listing_id = l.id) DESC,"
         "          l.collected_at DESC LIMIT ?", (*params, limit))
     ids = [r[0] for r in await cur.fetchall()]
 
-    done = failed = 0
+    done = failed = skipped = junk = 0
     spent = 0.0
     for lid in ids:
         row = await store.get_facts(lid)
+        # Платить только за то, что может кому-то пригодиться
+        pointless = enrichment_can_help(row or {}, profiles)
+        if pointless:
+            await store.save_facts(lid, {"llm_at": _now_utc()})
+            skipped += 1
+            continue
         facts = Facts()
         for name in FACT_COLUMNS:
             if hasattr(facts, name) and row.get(name) is not None:
@@ -374,8 +424,7 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
         if usage.get("skipped"):
             # Спрашивать нечего: все поля уже заполнены. Тоже считается
             # обработанным, иначе объявление вечно висит в очереди.
-            await store.save_facts(lid, {"source_layer": "mixed",
-                                         "llm_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+            await store.save_facts(lid, {"source_layer": "mixed", "llm_at": _now_utc()})
             continue
         if not usage.get("ok"):
             failed += 1
@@ -383,11 +432,26 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
             continue
         await store.log_llm("extract", model, usage, lid)
         spent += usage.get("cost_usd", 0)
-        await store.save_facts(lid, {**facts_to_row(facts),
-                                     "llm_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+        await store.save_facts(lid, {**facts_to_row(facts), "llm_at": _now_utc(),
+                                     "llm_attempts": (row.get("llm_attempts") or 0) + 1})
+        # Модель посмотрела и не нашла ни цены, ни комнат, ни города. Это не
+        # объявление: так в базу попало предложение работы в Цюрихе — слово
+        # «квартир» в тексте было, поэтому фильтр канала его пропустил.
+        if not any(getattr(facts, name, None) for name in ("price", "rooms", "city")):
+            await store._db.execute(
+                "UPDATE listings SET junk_reason = ? WHERE id = ?",
+                ("ни цены, ни комнат, ни города после разбора", lid))
+            await store._db.commit()
+            junk += 1
+            continue
         await match_listing(store, lid)     # факты изменились — пересчитываем
         done += 1
-    return {"enriched": done, "failed": failed, "cost_usd": round(spent, 4)}
+    result = {"enriched": done, "failed": failed, "cost_usd": round(spent, 4)}
+    if skipped:
+        result["skipped_pointless"] = skipped
+    if junk:
+        result["junk"] = junk
+    return result
 
 
 # Какие поля таблицы стоят за жалобой пользователя. Мамад идёт вместе со своим

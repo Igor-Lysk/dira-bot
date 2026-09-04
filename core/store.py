@@ -59,7 +59,8 @@ def _freshness_sql(alias: str = "l") -> str:
     known = ",".join(f"'{s}'" for s in set(MAX_AGE_DAYS) | set(PRESENCE_SOURCES))
     parts.append(f"({alias}.source NOT IN ({known}) AND COALESCE({alias}.posted_at,"
                  f" {alias}.collected_at) >= date('now', '-{DEFAULT_MAX_AGE_DAYS} days'))")
-    return " AND (" + " OR ".join(parts) + ")"
+    return (f" AND {alias}.junk_reason IS NULL"
+            " AND (" + " OR ".join(parts) + ")")
 
 
 def _dump(value: Any) -> Any:

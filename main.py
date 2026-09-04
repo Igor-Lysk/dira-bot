@@ -23,7 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from bot.app import build
 from collectors import homeless, komo, yad2
 from collectors.telegram_v2 import TelegramMonitor
-from core import delivery, pipeline, settings
+from core import delivery, health, pipeline, settings
 from core.sources import channels_for
 from core.store import Store
 from db.migrate import migrate
@@ -173,6 +173,32 @@ async def main():
 
     _memory_warned = {"at": None}
 
+    _health_warned = {}
+
+    async def job_health():
+        """Сравнить показатели с ожиданиями и сказать, если не сходится.
+
+        Отдельная задача, а не строчки в логах: цикл дозаполнения три дня
+        выглядел в логе как нормальная работа, потому что смотреть было не на
+        что. Теперь смотрим на числа, а не на отсутствие ошибок."""
+        checks = await health.collect(store, settings.DB_PATH)
+        bad = health.failures(checks)
+        if not bad:
+            return
+        today = date.today().isoformat()
+        fresh = [name for name in bad if _health_warned.get(name) != today]
+        for name in bad:
+            _health_warned[name] = today
+        log.warning("самопроверка: не сходится %s", ", ".join(bad))
+        if not fresh:
+            return
+        text = "Самопроверка нашла расхождения:\n\n" + health.report(checks, only_bad=True)
+        for admin in await store.admins():
+            try:
+                await bot.send_message(admin, text)
+            except Exception as e:                  # noqa: BLE001
+                log.warning("не смог отправить отчёт самопроверки: %s", e)
+
     async def job_memory():
         """Предупредить администратора, пока память ещё есть.
 
@@ -230,6 +256,7 @@ async def main():
         (job_retry, settings.RETRY_INTERVAL_MIN, "retry", 600),
         (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck", 30),
         (job_memory, settings.MEMORY_CHECK_INTERVAL_MIN, "memory", 45),
+        (job_health, settings.HEALTH_CHECK_INTERVAL_MIN, "health", 300),
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
         (job_details, settings.DETAILS_INTERVAL_MIN, "details", 180),

@@ -48,6 +48,10 @@ HEALTHCHECK_INTERVAL_MIN = 10
 MEMORY_WARN_MB = 300
 MEMORY_CHECK_INTERVAL_MIN = 30
 
+# Самопроверка показателей (core/health.py). Раз в час: чаще незачем, реже —
+# и сутки уходят до того, как расхождение заметно.
+HEALTH_CHECK_INTERVAL_MIN = 60
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 TIMEZONE = "Asia/Jerusalem"
 
