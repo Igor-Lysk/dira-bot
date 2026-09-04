@@ -6,8 +6,9 @@
 
 Здесь у каждого профиля свой режим:
 
-* **realtime** — сразу, но с ограничениями: тихие часы и дневной потолок.
-  Для тех, кто хочет написать хозяину первым.
+* **realtime** — карточка на каждое объявление, как оно появилось. Для тех,
+  кто хочет написать хозяину первым. Ограничений два: тихие часы и дневной
+  предел.
 * **digest** — копится и уходит одним сообщением в выбранный час.
 
 Обе доставки шлют только то, что появилось после настройки профиля. Найденное
@@ -16,8 +17,9 @@
 очереди за ними.
 
 Тихие часы не отменяют находку, а откладывают её: то, что пришло ночью, уйдёт
-утром, а не пропадёт. Уйдёт при этом одним списком — иначе тихие часы просто
-переносили бы флуд на восемь утра.
+утром, а не пропадёт. И уйдёт одним списком — иначе тихие часы просто
+переносили бы флуд на восемь утра. Это единственный случай, когда мгновенная
+доставка меняет формат: днём всегда карточки.
 """
 
 import logging
@@ -34,7 +36,8 @@ log = logging.getLogger(__name__)
 
 TZ = ZoneInfo("Asia/Jerusalem")
 REALTIME_BATCH = 5          # сколько карточек за раз, чтобы не залить чат
-BURST_TO_LIST = 6           # с этого числа шлём список, а не карточки
+MORNING_TO_LIST = 3         # с этого числа накопленное за ночь уходит списком
+FLOOD_TO_LIST = 10          # столько сразу среди дня — уже не поток, а сбой
 BURST_LIMIT = 20            # строк в таком списке
 DIGEST_LIMIT = 15           # строк в одном дайджесте; остальное — по /feed
 
@@ -65,10 +68,23 @@ async def _send_card(bot, chat_id: int, facts: dict, rank=None, reasons=None,
 
 
 async def deliver_realtime(bot, store: Store, profile: dict) -> int:
-    """Отправить новые совпадения профилю. Возвращает, сколько ушло."""
+    """Отправить новые совпадения профилю. Возвращает, сколько ушло.
+
+    Формат по умолчанию — карточка на объявление. Живой поток это позволяет:
+    телеграм отдаёт объявление в момент публикации, доски опрашиваются раз в
+    час и приносят единицы. Списком уходит только накопленное за тихие часы.
+    """
     if profile.get("is_paused"):
         return 0
+
     if in_quiet_hours(profile):
+        # Отметка, что доставку придержали. По ней утренняя отправка узнает,
+        # что перед ней ночное накопленное, а не обычный поток. Считать по
+        # часам было бы приблизительно: «первый час после тихих» и «первая
+        # доставка после тихих» — разные вещи, доставка просыпается каждые
+        # пять минут.
+        if not profile.get("quiet_held_at"):
+            await store.update_profile(profile["id"], quiet_held_at=_now().isoformat())
         return 0
 
     cap = profile.get("max_per_day") or 50
@@ -77,7 +93,7 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
     since = profile.get("backlog_before")
 
     if room == 0:
-        log.info("профиль %s: дневной лимит %s исчерпан", profile["id"], cap)
+        log.info("профиль %s: дневной предел %s исчерпан", profile["id"], cap)
         # Предел — предохранитель, а не норма: при живом потоке в два десятка
         # объявлений в сутки до него не доходит. Значит, если он сработал, дело
         # почти наверняка в критериях или в догоняющем сборе, и человеку надо
@@ -99,28 +115,27 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
     if not queue:
         return 0
 
-    # Пачка карточек — это пачка уведомлений. Так выглядит утро после тихих
-    # часов: за ночь накопилось десять объявлений, и мгновенная доставка
-    # вываливает их подряд, повторяя ровно ту ошибку, из-за которой в первое
-    # утро дайджест ушёл двадцать четыре раза. Поэтому от шести штук —
-    # компактный список, а карточка остаётся тем, чем задумана: одной находкой.
-    if len(queue) >= BURST_TO_LIST:
+    held = profile.get("quiet_held_at")
+    morning = bool(held) and len(queue) >= MORNING_TO_LIST
+    # Десяток разом среди дня живой поток не даёт. Столько сразу означает не
+    # поток, а сбой — и десять уведомлений подряд его только усугубят.
+    flood = len(queue) >= FLOOD_TO_LIST
+
+    if morning or flood:
         own = await market_mod.medians(store)
-        # После тихих часов это накопленное за ночь, в середине дня — просто
-        # пачка сразу. Заголовок называет вещи как есть: «пока тебя не
-        # беспокоили» в три часа дня выглядело бы враньём.
-        after_quiet = profile.get("quiet_to") is not None and _now().hour == profile["quiet_to"]
         total = len(await store.queue_for(profile["id"], limit=1000, since=since))
         await bot.send_message(
             profile["user_id"],
             cards.digest(queue, total=total, own_medians=own,
-                         title="Пока тебя не беспокоили" if after_quiet else "Сразу несколько"),
+                         title="Пока тебя не беспокоили" if morning else "Сразу несколько"),
             parse_mode="HTML", disable_web_page_preview=True)
         await store.mark_sent(profile["id"], [f["listing_id"] for f in queue])
+        if held:
+            await store.update_profile(profile["id"], quiet_held_at=None)
         return len(queue)
 
     sent = []
-    for facts in queue:
+    for facts in queue[:REALTIME_BATCH]:
         history = await store.price_history(facts["listing_id"])
         prefix = ""
         if len(history) > 1 and history[0]["price"] != history[-1]["price"]:
@@ -139,6 +154,8 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
             log.warning("не отправилось %s: %s", facts["listing_id"], e)
     if sent:
         await store.mark_sent(profile["id"], sent)
+    if held:
+        await store.update_profile(profile["id"], quiet_held_at=None)
     return len(sent)
 
 
