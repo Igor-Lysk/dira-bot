@@ -233,11 +233,25 @@ class Store:
         return _rows(await cur.fetchall())
 
     async def save_facts(self, listing_id: str, facts: dict):
+        """Записать факты, трогая только переданные поля.
+
+        Было `INSERT OR REPLACE`, а он удаляет строку и вставляет заново, то
+        есть непереданные столбцы обнуляются. Вызов вида
+        `save_facts(lid, {"source_layer": "rules"})` стирал разбор объявления
+        целиком — цену, комнаты, мамад, всё. Данные потом восстанавливались
+        моделью, поэтому потери не бросались в глаза: их оплачивали.
+
+        Явно переданный None по-прежнему стирает поле — на этом держится
+        жалоба «данные неверны»."""
         facts = {k: v for k, v in facts.items() if k != "listing_id"}
+        if not facts:
+            return
         cols = ["listing_id", *facts]
+        updates = ", ".join(f"{k}=excluded.{k}" for k in facts)
         await self._db.execute(
-            f"INSERT OR REPLACE INTO listing_facts ({','.join(cols)})"
-            f" VALUES ({','.join('?' * len(cols))})",
+            f"INSERT INTO listing_facts ({','.join(cols)})"
+            f" VALUES ({','.join('?' * len(cols))})"
+            f" ON CONFLICT(listing_id) DO UPDATE SET {updates}",
             [listing_id] + [_dump(v) for v in facts.values()])
         await self._db.commit()
 

@@ -17,6 +17,7 @@ score 0», и объявление терялось навсегда (F-11).
 
 import hashlib
 import logging
+from datetime import datetime
 import re
 from typing import Optional
 
@@ -304,9 +305,11 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                     ("\n\n" + page["description"], lid))
             if page["facts"]:
                 existing = await store.get_facts(lid)
+                # Скобки важны: без них `k == "commission"` перевешивало
+                # проверку на None и записывало пустую комиссию поверх любой.
                 merged = {k: v for k, v in page["facts"].items()
-                          if v is not None and existing.get(k) is None
-                          or k == "commission"}
+                          if v is not None
+                          and (existing.get(k) is None or k == "commission")}
                 if merged:
                     await store.save_facts(lid, merged)
                     filled += 1
@@ -315,7 +318,7 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                 # Возвращаем строку фактов в слой «только правила», чтобы её
                 # подобрал проход дозаполнения: комиссия, мебель, лифт живут
                 # именно в описании, а не в подписях доски.
-                await store.save_facts(lid, {"source_layer": "rules"})
+                await store.save_facts(lid, {"source_layer": "rules", "llm_at": None})
             await match_listing(store, lid)
         await store._db.commit()
     finally:
@@ -350,7 +353,11 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
 
     cur = await store._db.execute(
         "SELECT l.id FROM listings l JOIN listing_facts f ON f.listing_id = l.id"
-        " WHERE f.source_layer = 'rules' AND l.status = 'extracted'" + city_clause +
+        # Спрашиваем один раз. «Модель ничего не добавила» — это ответ, а не
+        # повод спросить снова: текст объявления не меняется, и следующие
+        # триста попыток дадут то же самое (решение 0011).
+        " WHERE f.llm_at IS NULL AND f.source_layer <> 'source'"
+        " AND l.status = 'extracted'" + city_clause +
         " ORDER BY EXISTS (SELECT 1 FROM matches m WHERE m.listing_id = l.id) DESC,"
         "          l.collected_at DESC LIMIT ?", (*params, limit))
     ids = [r[0] for r in await cur.fetchall()]
@@ -365,7 +372,10 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
                 setattr(facts, name, row[name])
         facts, usage = await fill_gaps(row["raw_text"], facts, client, model)
         if usage.get("skipped"):
-            await store.save_facts(lid, {**facts_to_row(facts), "source_layer": "mixed"})
+            # Спрашивать нечего: все поля уже заполнены. Тоже считается
+            # обработанным, иначе объявление вечно висит в очереди.
+            await store.save_facts(lid, {"source_layer": "mixed",
+                                         "llm_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
             continue
         if not usage.get("ok"):
             failed += 1
@@ -373,7 +383,8 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
             continue
         await store.log_llm("extract", model, usage, lid)
         spent += usage.get("cost_usd", 0)
-        await store.save_facts(lid, facts_to_row(facts))
+        await store.save_facts(lid, {**facts_to_row(facts),
+                                     "llm_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
         await match_listing(store, lid)     # факты изменились — пересчитываем
         done += 1
     return {"enriched": done, "failed": failed, "cost_usd": round(spent, 4)}
