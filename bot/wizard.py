@@ -46,7 +46,7 @@ QUIET_CHOICES = [
     ("0-7", "00:00 – 7:00"),
     ("none", "Не нужны, присылать круглосуточно"),
 ]
-CAP_CHOICES = [5, 10, 20, 40]
+CAP_CHOICES = [20, 50, 100]
 ROOMS_CHOICES = [1, 1.5, 2, 2.5, 3, 3.5, 4]
 
 
@@ -176,12 +176,15 @@ STEPS = [
     {
         "key": "max_per_day",
         "kind": "number",
-        "title": "Сколько в день",
-        "question": "Потолок сообщений в сутки? Всё сверх него не теряется, "
-                    "а ждёт следующего дня и лежит в /feed.",
+        "title": "Предел за сутки",
+        "question": "Сколько объявлений за сутки считать нормой? Это страховка от "
+                    "лавины, а не способ уменьшить поток.",
         "options": [(str(c), str(c)) for c in CAP_CHOICES],
-        "hint": "В прошлой версии бота потолка не было: в пиковый день пришло 41 "
-                "сообщение, и читать их человек перестал.",
+        "hint": "Реальный поток даже при широких критериях — около 20 подходящих в "
+                "сутки, и приходят они списками, а не по одному. До предела дело "
+                "доходит только при ошибке в критериях или догоняющем сборе после "
+                "простоя: тогда всё сверх него ждёт в /feed, а сюда придёт "
+                "предупреждение.",
         "hidden_if": lambda data: data.get("delivery_mode") != "realtime",
     },
     {
@@ -300,8 +303,8 @@ def apply(key: str, data: dict, answer: str) -> Tuple[bool, Optional[str]]:
             return False, "Комнат ожидаю от 0.5 до 10."
         if key == "digest_hour" and not (0 <= value <= 23):
             return False, "Час от 0 до 23."
-        if key == "max_per_day" and not (1 <= value <= 100):
-            return False, "Ожидаю от 1 до 100 сообщений в день."
+        if key == "max_per_day" and not (5 <= value <= 500):
+            return False, "Ожидаю от 5 до 500 объявлений в сутки."
         data[key] = int(value) if key != "rooms_min" else value
         return True, None
 
@@ -357,7 +360,7 @@ def to_profile(data: dict) -> dict:
         quiet = parse_quiet(data.get("quiet") or "none")
         profile["quiet_from"] = quiet[0] if quiet else None
         profile["quiet_to"] = quiet[1] if quiet else None
-        profile["max_per_day"] = data.get("max_per_day") or 20
+        profile["max_per_day"] = data.get("max_per_day") or 50
     return profile
 
 
@@ -381,7 +384,7 @@ def summary(data: dict) -> str:
         quiet = parse_quiet(data.get("quiet") or "none")
         lines.append(f"Тихие часы: {quiet[0]}:00 – {quiet[1]}:00" if quiet
                      else "Тихие часы: не заданы")
-        lines.append(f"Не больше {data.get('max_per_day') or 20} сообщений в день")
+        lines.append(f"Предел за сутки: {data.get('max_per_day') or 50} объявлений")
     else:
         lines.append(f"Присылать: дайджестом в {data.get('digest_hour', 9)}:00")
     if data.get("stop_words"):

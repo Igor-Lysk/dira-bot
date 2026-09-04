@@ -69,25 +69,27 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
     if in_quiet_hours(profile):
         return 0
 
-    cap = profile.get("max_per_day") or 20
+    cap = profile.get("max_per_day") or 50
     already = await store.sent_today(profile["id"])
     room = max(0, cap - already)
     since = profile.get("backlog_before")
 
     if room == 0:
         log.info("профиль %s: дневной лимит %s исчерпан", profile["id"], cap)
-        # Молчание после исчерпанного лимита неотличимо от поломки: в первый же
-        # день лимит выбрался за минуту, и дальше одиннадцать часов тишины
-        # выглядели как сломанная доставка. Одна строка в сутки, и только если
-        # что-то действительно осталось за бортом.
+        # Предел — предохранитель, а не норма: при живом потоке в два десятка
+        # объявлений в сутки до него не доходит. Значит, если он сработал, дело
+        # почти наверняка в критериях или в догоняющем сборе, и человеку надо
+        # сказать об этом прямо. Молчание неотличимо от поломки: в первый же
+        # день предел выбрался за минуту, и одиннадцать часов тишины выглядели
+        # как сломанная доставка.
         waiting = len(await store.queue_for(profile["id"], limit=cap + 1, since=since))
         today = _now().date().isoformat()
         if waiting and profile.get("cap_notice_on") != today:
             await bot.send_message(
                 profile["user_id"],
-                f"Дневной лимит в {cap} сообщений исчерпан — "
-                f"ещё {waiting} подходящих ждут в /feed. "
-                f"Лимит меняется в /settings.")
+                f"За сутки набралось больше {cap} подходящих объявлений — "
+                f"это выше обычного потока, и похоже, что критерии слишком широки. "
+                f"Ещё {waiting} ждут в /feed. Критерии и предел — в /settings.")
             await store.update_profile(profile["id"], cap_notice_on=today)
         return 0
 
