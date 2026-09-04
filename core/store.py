@@ -91,7 +91,14 @@ class Store:
         """Зарегистрировать при первом обращении, иначе обновить отметку активности.
 
         Открытая регистрация: любой, кто написал боту, заводится сам. Закрывать
-        доступ можно флагом is_active, а не белым списком в конфиге."""
+        доступ можно флагом is_active, а не белым списком в конфиге.
+
+        В ответе есть ключ `is_new` — правда только в тот единственный раз,
+        когда человек написал впервые. По нему уходит сообщение администратору:
+        регистрация открытая, и знать, что кто-то пришёл, надо в тот же момент,
+        а не при следующем взгляде на статистику."""
+        cur = await self._db.execute("SELECT 1 FROM users WHERE telegram_id=?", (telegram_id,))
+        is_new = await cur.fetchone() is None
         await self._db.execute(
             "INSERT INTO users (telegram_id, username, first_name, last_seen_at)"
             " VALUES (?,?,?,datetime('now'))"
@@ -100,7 +107,9 @@ class Store:
             (telegram_id, username, first_name))
         await self._db.commit()
         cur = await self._db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
-        return _row(await cur.fetchone())
+        user = _row(await cur.fetchone()) or {}
+        user["is_new"] = is_new
+        return user
 
     async def admins(self) -> list:
         """Кому идут служебные сообщения: о нехватке памяти, о сбоях сбора.

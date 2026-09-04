@@ -43,6 +43,26 @@ class AuthMiddleware(BaseMiddleware):
     def __init__(self, store: Store):
         self.store = store
 
+    async def _announce(self, bot, user: dict):
+        """Сообщить администратору о новом человеке.
+
+        Доступ решено оставить открытым, но не молчаливым: администратор должен
+        узнать о новом пользователе в ту же минуту, а не при следующем взгляде
+        на /stats. Заодно это единственный момент, когда можно быстро закрыть
+        доступ, если пришёл кто-то посторонний."""
+        if bot is None:
+            return
+        name = user.get("first_name") or "без имени"
+        handle = f"@{user['username']}" if user.get("username") else "без ника"
+        for admin in await self.store.admins():
+            if admin == user.get("telegram_id"):
+                continue
+            with suppress(Exception):
+                await bot.send_message(
+                    admin,
+                    f"Новый пользователь: {name}, {handle}, id {user['telegram_id']}.\n"
+                    f"Закрыть доступ: /block {user['telegram_id']}")
+
     async def __call__(self, handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
                        event: TelegramObject, data: Dict[str, Any]) -> Any:
         tg_user = data.get("event_from_user")
@@ -50,6 +70,8 @@ class AuthMiddleware(BaseMiddleware):
             return await handler(event, data)
         user = await self.store.ensure_user(
             tg_user.id, tg_user.username or "", tg_user.first_name or "")
+        if user.pop("is_new", False):
+            await self._announce(data.get("bot") or getattr(event, "bot", None), user)
         if not user.get("is_active", 1):
             if isinstance(event, Message):
                 await event.answer("Доступ к боту закрыт. Напиши администратору, если это ошибка.")
@@ -422,6 +444,33 @@ async def on_edit_field(callback: CallbackQuery, user: dict, store: Store):
     user = await store.get_user(user["telegram_id"])
     await callback.answer()
     await _ask(callback, user, store)
+
+
+@router.message(Command("block"))
+async def cmd_block(message: Message, user: dict, store: Store):
+    """Закрыть или открыть доступ. Только для администратора."""
+    if not user.get("is_admin"):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+        await message.answer("Кого закрыть? /block <id>, обратно — /unblock <id>")
+        return
+    target = int(parts[1])
+    await store.set_user(target, is_active=0)
+    await message.answer(f"Доступ для {target} закрыт. Вернуть — /unblock {target}")
+
+
+@router.message(Command("unblock"))
+async def cmd_unblock(message: Message, user: dict, store: Store):
+    if not user.get("is_admin"):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+        await message.answer("Кому открыть? /unblock <id>")
+        return
+    target = int(parts[1])
+    await store.set_user(target, is_active=1)
+    await message.answer(f"Доступ для {target} открыт.")
 
 
 @router.message(Command("pause"))
