@@ -179,9 +179,17 @@ async def process(store: Store, raw: dict) -> dict:
     """Обработать одно сырое объявление. Возвращает, что с ним стало."""
     text = raw.get("raw_text") or ""
     url = raw.get("url")
+    source = raw.get("source", "telegram")
     lid = listing_id(url, text, raw.get("source_id"))
 
+    # Сообщение, которое мы уже читали, не должно ничего менять — даже если в
+    # прошлый раз оно стало не объявлением, а повтором.
+    key = str(raw.get("source_id") or url or lid)
+    if await store.message_seen(source, key):
+        return {"status": "seen", "listing_id": lid}
+
     if await store.listing_exists(lid):
+        await store.remember_message(source, key, lid, "duplicate")
         return {"status": "duplicate", "listing_id": lid}
 
     facts = extract(text)
@@ -204,7 +212,9 @@ async def process(store: Store, raw: dict) -> dict:
 
     repost = await _find_repost(store, facts, facts.fingerprint or "", text)
     if repost:
-        return await _handle_repost(store, repost, facts, raw, lid)
+        result = await _handle_repost(store, repost, facts, raw, lid)
+        await store.remember_message(source, key, repost["id"], "repost")
+        return result
 
     await store.add_listing(
         id=lid, source=raw.get("source", "telegram"), source_id=raw.get("source_id"),
@@ -215,6 +225,7 @@ async def process(store: Store, raw: dict) -> dict:
         await store.add_price(lid, facts.price, raw.get("source"))
 
     created = await match_listing(store, lid)
+    await store.remember_message(source, key, lid, "new")
     return {"status": "new", "listing_id": lid, "matches": created}
 
 
@@ -225,10 +236,19 @@ async def _handle_repost(store: Store, previous: dict, facts, raw: dict, new_id:
     old_price = old.get("price") if old else None
 
     await store.save_facts(old_id, facts_to_row(facts))
+    # collected_at не трогаем: это момент, когда объявление впервые попало к
+    # нам, и на нём держится отсечение старых. Повтор обновляет last_seen_at —
+    # «квартира всё ещё предлагается».
+    #
+    # Текст перезаписываем только если у объявления нет скачанного описания:
+    # оно длиннее и полезнее любого повторного поста, а модель по нему уже
+    # прошла и второй раз не пойдёт.
+    keep_text = previous.get("details_at") is not None
     await store._db.execute(
-        "UPDATE listings SET url=?, raw_text=?, collected_at=datetime('now'),"
-        " status='extracted' WHERE id=?",
-        (raw.get("url") or previous.get("url"), raw.get("raw_text"), old_id))
+        "UPDATE listings SET url=?, raw_text=CASE WHEN ? THEN raw_text ELSE ? END,"
+        " last_seen_at=datetime('now'), missed_scans=0, status='extracted' WHERE id=?",
+        (raw.get("url") or previous.get("url"), 1 if keep_text else 0,
+         raw.get("raw_text"), old_id))
     await store._db.commit()
 
     changed = False
@@ -236,11 +256,15 @@ async def _handle_repost(store: Store, previous: dict, facts, raw: dict, new_id:
         await store.add_price(old_id, facts.price, raw.get("source"))
         changed = True
 
-    # Возвращаем в выдачу: изменившаяся цена — новость, повтор без изменений — тоже
-    # сигнал (квартира всё ещё свободна), но менее срочный.
-    await store._db.execute(
-        "UPDATE matches SET state='new' WHERE listing_id=? AND state='sent'", (old_id,))
-    await store._db.commit()
+    # Возвращаем в выдачу только изменившуюся цену. Прежняя версия будила
+    # любой повтор — «квартира всё ещё свободна» казалось сигналом. На практике
+    # это значит, что человек второй раз читает карточку, которую уже видел, а
+    # при перечитывании трёх суток на каждом запуске — и десятый раз тоже.
+    # За один день так набралось 96 повторных отправок.
+    if changed:
+        await store._db.execute(
+            "UPDATE matches SET state='new' WHERE listing_id=? AND state='sent'", (old_id,))
+        await store._db.commit()
     await match_listing(store, old_id)
     return {"status": "repost", "listing_id": old_id, "price_changed": changed,
             "old_price": old_price, "new_price": facts.price}

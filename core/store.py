@@ -170,6 +170,24 @@ class Store:
 
     # ── объявления и факты ───────────────────────────────────────────────────
 
+    async def message_seen(self, source: str, key: str) -> bool:
+        """Читали ли мы уже это сообщение источника.
+
+        Отдельно от объявлений, потому что сообщение может не стать объявлением:
+        повтор сливается с прежней записью, мусор отбрасывается. Без такой
+        отметки перечитывание трёх суток при каждом запуске каждый раз выглядит
+        как первое знакомство."""
+        cur = await self._db.execute(
+            "SELECT 1 FROM seen_messages WHERE source=? AND key=?", (source, key))
+        return await cur.fetchone() is not None
+
+    async def remember_message(self, source: str, key: str,
+                               listing_id: str = None, outcome: str = None):
+        await self._db.execute(
+            "INSERT OR IGNORE INTO seen_messages (source, key, listing_id, outcome)"
+            " VALUES (?,?,?,?)", (source, key, listing_id, outcome))
+        await self._db.commit()
+
     async def listing_exists(self, listing_id: str) -> bool:
         cur = await self._db.execute("SELECT 1 FROM listings WHERE id=?", (listing_id,))
         return await cur.fetchone() is not None
@@ -307,6 +325,11 @@ class Store:
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             " WHERE m.profile_id=? AND m.state='new'"
+            # Одно объявление одному человеку — не чаще раза в сутки, чем бы
+            # ни было вызвано возвращение в очередь. Предел поверх всех причин:
+            # проще проверить одно правило, чем каждый раз доказывать, что
+            # очередной путь не приведёт к повторной отправке.
+            " AND (m.sent_at IS NULL OR m.sent_at < datetime('now','-1 day'))"
             + _freshness_sql("l") +
             (" AND l.collected_at > ?" if since else "") +
             " ORDER BY m.rank DESC LIMIT ?",
