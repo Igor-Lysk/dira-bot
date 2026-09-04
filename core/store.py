@@ -264,16 +264,21 @@ class Store:
         return True
 
     async def queue_for(self, profile_id: int, limit: int = 50) -> list:
-        """Что ещё не отправлено этому профилю, по убыванию ранга."""
+        """Что ещё не отправлено этому профилю, по убыванию ранга.
+
+        Свежесть считается тем же выражением, что и в ленте: у части источников
+        по присутствию в последних сканах, у остальных по своему сроку. Раньше
+        здесь к нему был приклеен ещё и общий недельный порог — остаток прежней
+        версии, из-за которого запрос был синтаксически неверным и очередь
+        падала целиком. Незаметно это оставалось, пока доставка шла дайджестом
+        раз в сутки.
+        """
         cur = await self._db.execute(
             "SELECT m.rank, m.reasons, l.*, f.* FROM matches m"
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             " WHERE m.profile_id=? AND m.state='new'"
             + _freshness_sql("l") +
-            f"     OR (l.source NOT IN ({_presence_sql()})"
-            f"         AND COALESCE(l.posted_at, l.collected_at) >="
-            f"             date('now', '-{self.MAX_AGE_DAYS} days')))"
             " ORDER BY m.rank DESC LIMIT ?",
             (profile_id, limit))
         return _rows(await cur.fetchall())
