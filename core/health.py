@@ -93,10 +93,24 @@ async def collect(store: Store, db_path: Optional[str] = None) -> list:
 
     # 3. Очередь к модели. Должна убывать; постоянно полная означает, что
     #    что-то в неё возвращается.
+    #
+    #    Считается ровно тем же условием, что и сама очередь, включая города
+    #    активных профилей. Первая версия города не учитывала и показывала 84
+    #    при реальной очереди в ноль: объявления из Хайфы к модели не идут и
+    #    лежать в этом числе будут вечно. Показатель, который не совпадает с
+    #    тем, что он измеряет, — это следующая ошибка того же рода.
+    profiles = await store.active_profiles()
+    cities = sorted({c for p in profiles for c in (p.get("cities") or [])})
+    city_clause, params = "", []
+    if cities:
+        placeholders = ",".join("?" * len(cities))
+        city_clause = f" AND (f.city IS NULL OR f.city IN ({placeholders}))"
+        params = cities
     queue = await _one(db,
         "SELECT COUNT(*) FROM listings l JOIN listing_facts f ON f.listing_id = l.id"
         " WHERE f.llm_at IS NULL AND f.source_layer <> 'source'"
-        "   AND l.status = 'extracted' AND l.junk_reason IS NULL") or 0
+        "   AND l.status = 'extracted' AND l.junk_reason IS NULL"
+        "   AND f.llm_attempts < 3" + city_clause, *params) or 0
     checks.append(Check("queue", queue <= MAX_QUEUE,
                         f"в очереди к модели: {queue} (порог {MAX_QUEUE})"))
 
