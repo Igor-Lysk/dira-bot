@@ -402,16 +402,52 @@ async def on_details(callback: CallbackQuery, user: dict, store: Store):
     await callback.message.answer(cards.details(facts or {}))
 
 
+WRONG_FIELDS = [
+    ("price", "Цена"), ("rooms", "Комнаты"), ("mamad", "Мамад"),
+    ("address", "Адрес"), ("other", "Другое"),
+]
+
+
 @router.callback_query(F.data.startswith("e:"))
 async def on_wrong_data(callback: CallbackQuery, user: dict, store: Store):
-    """«Данные неверны» — помечаем факты на переизвлечение.
+    """«Данные неверны» — спрашиваем, что именно неверно.
 
-    Самый ценный вид обратной связи: он чинит парсер и не требует никакого
-    обучения. Попадает в регрессионный набор."""
+    Один лишний тап превращает жалобу в адрес поломки. «Что-то не так» чинить
+    нельзя: в карточке полтора десятка полей, и без уточнения остаётся гадать.
+    """
     listing_id = callback.data.split(":", 1)[1]
-    await store.set_status(listing_id, "pending", "помечено пользователем как неверное")
-    await store.log_action(user["telegram_id"], "wrong_data", listing_id)
-    await callback.answer("Спасибо, перепроверим разбор этого объявления", show_alert=True)
+    rows, row = [], []
+    for code, label in WRONG_FIELDS:
+        row.append(InlineKeyboardButton(text=label, callback_data=f"ew:{code}:{listing_id}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    await callback.answer()
+    await callback.message.answer(
+        "Что именно неверно?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("ew:"))
+async def on_wrong_field(callback: CallbackQuery, user: dict, store: Store):
+    """Жалоба принята: стираем спорное поле и возвращаем объявление в разбор."""
+    from core.pipeline import mark_disputed
+    _, field, listing_id = callback.data.split(":", 2)
+    label = dict(WRONG_FIELDS).get(field, field)
+    ok = await mark_disputed(store, listing_id, field)
+    await store.log_action(user["telegram_id"], "wrong_data", listing_id, {"field": field})
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Записал: {label.lower()}. Разберу это объявление заново — "
+        f"обычно в течение десяти минут." if ok else
+        "Объявление уже не в базе, но жалобу записал.")
+    for admin in await store.admins():
+        if admin == user["telegram_id"]:
+            continue
+        with suppress(Exception):
+            await callback.bot.send_message(
+                admin, f"Жалоба на данные: {label.lower()}, объявление {listing_id}")
 
 
 # ── настройки и статистика ───────────────────────────────────────────────────

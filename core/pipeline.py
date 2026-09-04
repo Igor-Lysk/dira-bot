@@ -379,6 +379,48 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
     return {"enriched": done, "failed": failed, "cost_usd": round(spent, 4)}
 
 
+# Какие поля таблицы стоят за жалобой пользователя. Мамад идёт вместе со своим
+# признаком-уликой, адрес — целиком, потому что улица без города бесполезна.
+DISPUTED_FIELDS = {
+    "price": ["price"],
+    "rooms": ["rooms"],
+    "mamad": ["mamad", "mamad_evidence"],
+    "address": ["street", "district", "city"],
+    "other": [],
+}
+
+
+async def mark_disputed(store: Store, listing_id: str, field: str) -> bool:
+    """Жалоба «данные неверны»: стереть спорное поле и вернуть объявление в разбор.
+
+    Прежняя версия кнопки ставила статус `pending` — и всё. Часовой проход
+    возвращал статус обратно, а дозаполнение брало только объявления со слоем
+    `rules`, то есть уже разобранное моделью не трогало вовсе. Нажатие ничего
+    не меняло, кроме записи в журнале.
+
+    Стереть поле — не потеря, а постановка вопроса заново: модель спрашивается
+    ровно о пустых полях, поэтому очищенная цена гарантированно уедет к ней на
+    следующем проходе. Заодно объявление остаётся в выдаче: пустое поле у нас
+    никогда не считается нарушением критериев.
+    """
+    row = await store.get_facts(listing_id)
+    if not row:
+        return False
+    columns = DISPUTED_FIELDS.get(field, [])
+    fresh = {k: row.get(k) for k in FACT_COLUMNS if k in row}
+    fresh["phones"] = row.get("phones") or []
+    fresh["schema_version"] = row.get("schema_version", 1)
+    for name in columns:
+        fresh[name] = None
+    # Слой сбрасываем всегда: даже жалоба «другое» должна вернуть объявление
+    # на второй круг, иначе кнопка снова окажется пустышкой.
+    fresh["source_layer"] = "rules"
+    await store.save_facts(listing_id, fresh)
+    await store.set_status(listing_id, "extracted")
+    await match_listing(store, listing_id)
+    return True
+
+
 async def retry_pending(store: Store, client, model: str, limit: int = 25) -> dict:
     """Вернуть в работу то, что сорвалось. Без этого прохода `pending` — тупик."""
     rows = await store.pending_listings(limit=limit)
