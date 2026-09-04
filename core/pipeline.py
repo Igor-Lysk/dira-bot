@@ -287,59 +287,75 @@ async def match_listing(store: Store, lid: str) -> int:
 
 
 async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: int = 500) -> int:
-    """Прогнать уже собранные объявления по одному профилю.
+    """Пересчитать профиль: добавить подходящее, убрать переставшее подходить.
 
     Нужно потому, что сопоставление происходит в момент обработки объявления:
     всё, что бот собрал до того, как человек настроил профиль, иначе осталось бы
     невидимым. Без этого первый `/feed` после онбординга пустой, хотя в базе уже
     сотня объявлений. Вызывается при создании и при любом изменении профиля.
+
+    Два прохода, и это важно. Первый идёт по свежим объявлениям и ищет новые
+    совпадения — там ограничение по числу разумно. Второй перепроверяет уже
+    существующие совпадения профиля, все до единого: если человек опустил
+    потолок цены, из ленты должно уйти всё, что теперь не подходит, включая
+    подобранное неделю назад. Одного прохода по свежим для этого не хватало —
+    самые старые совпадения не попадали в выборку и оставались в ленте.
     """
     profile = await store.get_profile(profile_id)
     if not profile:
         return 0
-    cur = await store._db.execute(
-        "SELECT id FROM listings WHERE collected_at >= datetime('now', ?)"
-        " ORDER BY collected_at DESC LIMIT ?", (f"-{days} days", limit))
-    ids = [r[0] for r in await cur.fetchall()]
     own = await market_mod.medians(store)
-    created = dropped = 0
-    for lid in ids:
+
+    async def verdict(lid):
         facts = await store.get_facts(lid)
         if not facts:
-            continue
-        result = match(facts, profile, market=market_mod.assess(facts, own))
-        if result.matched:
-            if await store.add_match(profile_id, lid, result.rank, result.reasons):
+            return None
+        return match(facts, profile, market=market_mod.assess(facts, own)), facts
+
+    # ── проход первый: новые совпадения среди свежих объявлений ──────────────
+    cur = await store._db.execute(
+        "SELECT id FROM listings WHERE collected_at >= datetime('now', ?)"
+        "   AND junk_reason IS NULL ORDER BY collected_at DESC LIMIT ?",
+        (f"-{days} days", limit))
+    created = 0
+    for (lid,) in await cur.fetchall():
+        got = await verdict(lid)
+        if got and got[0].matched:
+            if await store.add_match(profile_id, lid, got[0].rank, got[0].reasons):
                 created += 1
-            else:
-                # Подходит снова — например, человек вернул прежний потолок
+
+    # ── проход второй: перепроверка всего, что уже подобрано ─────────────────
+    cur = await store._db.execute(
+        "SELECT listing_id, state, sent_at, stale_at FROM matches WHERE profile_id=?",
+        (profile_id,))
+    rows = [dict(r) for r in await cur.fetchall()]
+    dropped = stale = revived = 0
+    for row in rows:
+        lid = row["listing_id"]
+        got = await verdict(lid)
+        matched = bool(got and got[0].matched)
+        if matched:
+            if row["stale_at"]:
                 await store._db.execute(
-                    "UPDATE matches SET stale_at=NULL WHERE profile_id=? AND listing_id=?"
-                    "  AND stale_at IS NOT NULL", (profile_id, lid))
-        else:
-            # Сужение критериев должно убирать лишнее, а не только добавлять
-            # новое. Иначе человек ставит потолок 5000, а в ленте остаются
-            # квартиры по 9000, подобранные под прежние настройки, — и решает,
-            # что фильтр не работает.
-            #
-            # Убираем только неотправленное: карточка, которую человек уже
-            # видел или отметил, принадлежит его истории, а не текущим
-            # критериям.
-            cur = await store._db.execute(
-                "DELETE FROM matches WHERE profile_id=? AND listing_id=? AND state='new'"
-                " AND sent_at IS NULL", (profile_id, lid))
-            dropped += cur.rowcount or 0
-            # Отправленное не удаляем, а помечаем: запись о том, что человеку
-            # это показывали, нужна и для защиты от повторов, и для статистики.
-            # Но в ленте ему не место — иначе при потолке 5000 там висит
-            # квартира за 7500, подобранная под прежние настройки.
+                    "UPDATE matches SET stale_at=NULL WHERE profile_id=? AND listing_id=?",
+                    (profile_id, lid))
+                revived += 1
+            continue
+        if row["state"] == "new" and not row["sent_at"]:
+            # Неотправленное просто убираем: истории в нём нет.
+            await store._db.execute(
+                "DELETE FROM matches WHERE profile_id=? AND listing_id=?", (profile_id, lid))
+            dropped += 1
+        elif not row["stale_at"]:
+            # Отправленное остаётся записью о том, что человек это видел, но в
+            # ленту не идёт: при потолке 5000 там не место квартире за 7875.
             await store._db.execute(
                 "UPDATE matches SET stale_at=datetime('now')"
-                " WHERE profile_id=? AND listing_id=? AND stale_at IS NULL",
-                (profile_id, lid))
+                " WHERE profile_id=? AND listing_id=?", (profile_id, lid))
+            stale += 1
     await store._db.commit()
-    log.info("профиль %s: пересчёт по %d объявлениям, новых совпадений %d, убрано %d",
-             profile_id, len(ids), created, dropped)
+    log.info("профиль %s: пересчёт — новых %d, убрано %d, скрыто %d, возвращено %d",
+             profile_id, created, dropped, stale, revived)
     return created
 
 
