@@ -83,6 +83,18 @@ def listing_id(url: Optional[str], text: str, source_id: Optional[str] = None) -
     return hashlib.sha256(base.encode()).hexdigest()[:20]
 
 
+def _room_for_one_more(attempts) -> int:
+    """Оставить место ровно на одно обращение к модели.
+
+    Нужно там, где появился законный повод спросить заново: у объявления
+    выросло описание или человек пожаловался на данные. Просто обнулять счётчик
+    нельзя — тогда предел перестаёт быть пределом и десять нажатий кнопки дают
+    десять вызовов. Просто игнорировать тоже нельзя: у объявления, набравшего
+    три попытки в прошлом, жалоба осталась бы без ответа.
+    """
+    return min(attempts or 0, MAX_LLM_ATTEMPTS - 1)
+
+
 def _now_utc() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -329,7 +341,9 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                 # Возвращаем строку фактов в слой «только правила», чтобы её
                 # подобрал проход дозаполнения: комиссия, мебель, лифт живут
                 # именно в описании, а не в подписях доски.
-                await store.save_facts(lid, {"source_layer": "rules", "llm_at": None})
+                current = (await store.get_facts(lid) or {}).get("llm_attempts")
+                await store.save_facts(lid, {"source_layer": "rules", "llm_at": None,
+                                             "llm_attempts": _room_for_one_more(current)})
             await match_listing(store, lid)
         await store._db.commit()
     finally:
@@ -496,6 +510,7 @@ async def mark_disputed(store: Store, listing_id: str, field: str) -> bool:
     # объявление на второй круг, иначе кнопка снова окажется пустышкой.
     changes["llm_at"] = None
     changes["source_layer"] = "rules"
+    changes["llm_attempts"] = _room_for_one_more(row.get("llm_attempts"))
     await store.save_facts(listing_id, changes)
     await store.set_status(listing_id, "extracted")
     await match_listing(store, listing_id)
