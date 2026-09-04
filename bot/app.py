@@ -114,8 +114,34 @@ EDITABLE = [
     ("cities", "Города"), ("price_max", "Потолок цены"), ("price_ideal", "Желаемая цена"),
     ("rooms_min", "Комнаты"), ("req_mamad", "Мамад"), ("req_elevator", "Лифт"),
     ("req_pets", "Животные"), ("req_no_commission", "Комиссия"), ("delivery_mode", "Как присылать"),
-    ("digest_hour", "Время дайджеста"), ("stop_words", "Стоп-слова"),
+    ("digest_hour", "Время дайджеста"), ("quiet", "Тихие часы"),
+    ("max_per_day", "Сколько в день"), ("stop_words", "Стоп-слова"),
 ]
+
+# Шаг визарда → поля профиля, которые он задаёт. По умолчанию имя совпадает,
+# но «тихие часы» это два поля, а смена режима доставки тянет за собой время
+# дайджеста и ограничения мгновенной отправки.
+PROFILE_FIELDS = {
+    "quiet": {"quiet_from", "quiet_to"},
+    "delivery_mode": {"delivery_mode", "digest_hour", "quiet_from", "quiet_to", "max_per_day"},
+}
+
+
+def _profile_data(p: dict, **extra) -> dict:
+    """Профиль из базы в том виде, в каком его понимает визард."""
+    quiet = (f"{p['quiet_from']}-{p['quiet_to']}"
+             if p.get("quiet_from") is not None and p.get("quiet_to") is not None else "none")
+    data = {
+        "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
+        "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
+        "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
+        "req_no_commission": p["req_no_commission"],
+        "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
+        "quiet": None if quiet == "none" else quiet,
+        "max_per_day": p["max_per_day"], "stop_words": p["stop_words"],
+    }
+    data.update(extra)
+    return data
 
 
 async def _save_single_field(target, user: dict, store: Store):
@@ -130,7 +156,7 @@ async def _save_single_field(target, user: dict, store: Store):
     if profiles and key:
         fields = wizard.to_profile(data)
         # пишем только то поле, которое правили, плюс связанное с ним
-        keep = {key} | ({"digest_hour"} if key == "delivery_mode" else set())
+        keep = PROFILE_FIELDS.get(key, {key})
         await store.update_profile(profiles[0]["id"],
                                    **{k: v for k, v in fields.items() if k in keep})
         from core.pipeline import rematch_profile
@@ -140,9 +166,12 @@ async def _save_single_field(target, user: dict, store: Store):
     await sender("Сохранено. Ещё что-нибудь поправить — /settings")
 
 
-def _settings_kb() -> InlineKeyboardMarkup:
+def _settings_kb(data: dict) -> InlineKeyboardMarkup:
     rows, row = [], []
+    allowed = set(wizard.visible_keys(data))
     for key, label in EDITABLE:
+        if key not in allowed:
+            continue
         row.append(InlineKeyboardButton(text=label, callback_data=f"edit:{key}"))
         if len(row) == 2:
             rows.append(row); row = []
@@ -366,19 +395,12 @@ async def cmd_settings(message: Message, user: dict, store: Store):
         await message.answer("Профиля ещё нет: /start")
         return
     p = profiles[0]
-    data = {
-        "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
-        "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
-        "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
-        "req_no_commission": p["req_no_commission"],
-        "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
-        "stop_words": p["stop_words"],
-    }
+    data = _profile_data(p)
     state = "на паузе" if p["is_paused"] else "работает"
     await message.answer(
         f"<b>Критерии поиска</b> ({state})\n\n{wizard.summary(data)}\n\n"
         f"Что поправить? Всё сразу — /setup. Пауза — /pause, снять — /resume.",
-        parse_mode=ParseMode.HTML, reply_markup=_settings_kb())
+        parse_mode=ParseMode.HTML, reply_markup=_settings_kb(data))
 
 
 @router.callback_query(F.data.startswith("edit:"))
@@ -389,14 +411,7 @@ async def on_edit_field(callback: CallbackQuery, user: dict, store: Store):
     if not profiles:
         await callback.answer("Сначала /start"); return
     p = profiles[0]
-    data = {
-        "cities": p["cities"], "price_max": p["price_max"], "price_ideal": p["price_ideal"],
-        "rooms_min": p["rooms_min"], "req_mamad": p["req_mamad"],
-        "req_elevator": p["req_elevator"], "req_pets": p["req_pets"],
-        "req_no_commission": p["req_no_commission"],
-        "delivery_mode": p["delivery_mode"], "digest_hour": p["digest_hour"],
-        "stop_words": p["stop_words"], "_edit_only": key,
-    }
+    data = _profile_data(p, _edit_only=key)
     await store.set_user(user["telegram_id"], onboarding_step=key, onboarding_data=data)
     user = await store.get_user(user["telegram_id"])
     await callback.answer()

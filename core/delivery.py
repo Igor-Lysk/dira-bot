@@ -11,7 +11,8 @@
 * **digest** — копится и уходит одним сообщением в выбранный час.
 
 Тихие часы не отменяют находку, а откладывают её: то, что пришло ночью, уйдёт
-утром, а не пропадёт.
+утром, а не пропадёт. Уйдёт при этом одним списком — иначе тихие часы просто
+переносили бы флуд на восемь утра.
 """
 
 import logging
@@ -26,6 +27,8 @@ log = logging.getLogger(__name__)
 
 TZ = ZoneInfo("Asia/Jerusalem")
 REALTIME_BATCH = 5          # сколько карточек за раз, чтобы не залить чат
+BURST_TO_LIST = 6           # с этого числа шлём список, а не карточки
+BURST_LIMIT = 20            # строк в таком списке
 DIGEST_LIMIT = 15           # строк в одном дайджесте; остальное — по /feed
 
 
@@ -68,9 +71,23 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
         log.info("профиль %s: дневной лимит %s исчерпан", profile["id"], cap)
         return 0
 
-    queue = await store.queue_for(profile["id"], limit=min(room, REALTIME_BATCH))
+    queue = await store.queue_for(profile["id"], limit=min(room, BURST_LIMIT))
     if not queue:
         return 0
+
+    # Пачка карточек — это пачка уведомлений. Так выглядит утро после тихих
+    # часов: за ночь накопилось десять объявлений, и мгновенная доставка
+    # вываливает их подряд, повторяя ровно ту ошибку, из-за которой в первое
+    # утро дайджест ушёл двадцать четыре раза. Поэтому от шести штук —
+    # компактный список, а карточка остаётся тем, чем задумана: одной находкой.
+    if len(queue) >= BURST_TO_LIST:
+        own = await market_mod.medians(store)
+        await bot.send_message(
+            profile["user_id"],
+            cards.digest(queue, title="Пока тебя не беспокоили", own_medians=own),
+            parse_mode="HTML", disable_web_page_preview=True)
+        await store.mark_sent(profile["id"], [f["listing_id"] for f in queue])
+        return len(queue)
 
     sent = []
     for facts in queue:

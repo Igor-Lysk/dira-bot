@@ -37,6 +37,16 @@ CITY_CHOICES = [
 ]
 
 PRICE_CHOICES = [4000, 5000, 6000, 7000, 8000, 9000, 10000]
+
+# Тихие часы задаются диапазоном «с — по», час по израильскому времени.
+# Интервал может пересекать полночь: 23–8 это ночь, а не двадцать один час.
+QUIET_CHOICES = [
+    ("23-8", "23:00 – 8:00"),
+    ("22-9", "22:00 – 9:00"),
+    ("0-7", "00:00 – 7:00"),
+    ("none", "Не нужны, присылать круглосуточно"),
+]
+CAP_CHOICES = [5, 10, 20, 40]
 ROOMS_CHOICES = [1, 1.5, 2, 2.5, 3, 3.5, 4]
 
 
@@ -44,6 +54,19 @@ def _parse_number(text: str) -> Optional[float]:
     text = (text or "").replace(",", ".").replace(" ", "").replace("₪", "")
     m = re.search(r"\d+(?:\.\d+)?", text)
     return float(m.group()) if m else None
+
+
+def parse_quiet(text: str):
+    """«23-8», «с 23 до 8», «23:00 8:00» → (23, 8). Иначе None."""
+    if (text or "").strip() == "none":
+        return None
+    nums = re.findall(r"\d{1,2}", (text or "").replace(":00", " "))
+    if len(nums) != 2:
+        return None
+    start, end = int(nums[0]), int(nums[1])
+    if not (0 <= start <= 23 and 0 <= end <= 23) or start == end:
+        return None
+    return start, end
 
 
 STEPS = [
@@ -141,6 +164,27 @@ STEPS = [
         "hidden_if": lambda data: data.get("delivery_mode") == "realtime",
     },
     {
+        "key": "quiet",
+        "kind": "range",
+        "title": "Тихие часы",
+        "question": "Когда не беспокоить? Найденное за это время не пропадёт — "
+                    "придёт, как только тихие часы закончатся.",
+        "options": QUIET_CHOICES,
+        "hint": "Можно написать свой диапазон, например «23-7».",
+        "hidden_if": lambda data: data.get("delivery_mode") != "realtime",
+    },
+    {
+        "key": "max_per_day",
+        "kind": "number",
+        "title": "Сколько в день",
+        "question": "Потолок сообщений в сутки? Всё сверх него не теряется, "
+                    "а ждёт следующего дня и лежит в /feed.",
+        "options": [(str(c), str(c)) for c in CAP_CHOICES],
+        "hint": "В прошлой версии бота потолка не было: в пиковый день пришло 41 "
+                "сообщение, и читать их человек перестал.",
+        "hidden_if": lambda data: data.get("delivery_mode") != "realtime",
+    },
+    {
         "key": "stop_words",
         "kind": "list",
         "title": "Стоп-слова",
@@ -159,6 +203,13 @@ DONE = "done"
 def _visible(step: dict, data: dict) -> bool:
     cond = step.get("hidden_if")
     return not cond(data) if cond else True
+
+
+def visible_keys(data: dict) -> list:
+    """Шаги, применимые к этому профилю. Нужно и визарду, и меню /settings:
+    предлагать «время дайджеста» тому, кто выбрал мгновенную доставку, — способ
+    получить настройку, которая ни на что не влияет."""
+    return [step["key"] for step in STEPS if _visible(step, data)]
 
 
 def first_step() -> str:
@@ -249,7 +300,19 @@ def apply(key: str, data: dict, answer: str) -> Tuple[bool, Optional[str]]:
             return False, "Комнат ожидаю от 0.5 до 10."
         if key == "digest_hour" and not (0 <= value <= 23):
             return False, "Час от 0 до 23."
+        if key == "max_per_day" and not (1 <= value <= 100):
+            return False, "Ожидаю от 1 до 100 сообщений в день."
         data[key] = int(value) if key != "rooms_min" else value
+        return True, None
+
+    if kind == "range":
+        if answer == "none":
+            data[key] = None
+            return True, None
+        parsed = parse_quiet(answer)
+        if parsed is None:
+            return False, "Нужны два часа, например «23-8»."
+        data[key] = f"{parsed[0]}-{parsed[1]}"
         return True, None
 
     if kind == "tristate":
@@ -288,6 +351,13 @@ def to_profile(data: dict) -> dict:
     }
     if data.get("delivery_mode") == "digest":
         profile["digest_hour"] = data.get("digest_hour", 9)
+    else:
+        # Тихие часы имеют смысл только при мгновенной доставке: дайджест и так
+        # уходит в выбранный час.
+        quiet = parse_quiet(data.get("quiet") or "none")
+        profile["quiet_from"] = quiet[0] if quiet else None
+        profile["quiet_to"] = quiet[1] if quiet else None
+        profile["max_per_day"] = data.get("max_per_day") or 20
     return profile
 
 
@@ -308,6 +378,10 @@ def summary(data: dict) -> str:
     ]
     if data.get("delivery_mode") == "realtime":
         lines.append("Присылать: сразу")
+        quiet = parse_quiet(data.get("quiet") or "none")
+        lines.append(f"Тихие часы: {quiet[0]}:00 – {quiet[1]}:00" if quiet
+                     else "Тихие часы: не заданы")
+        lines.append(f"Не больше {data.get('max_per_day') or 20} сообщений в день")
     else:
         lines.append(f"Присылать: дайджестом в {data.get('digest_hour', 9)}:00")
     if data.get("stop_words"):

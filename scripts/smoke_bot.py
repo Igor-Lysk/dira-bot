@@ -24,6 +24,9 @@ ANSWERS = {
     "price_max": ["8000"], "price_ideal": ["7500"], "rooms_min": ["2.5"],
     "req_mamad": ["allow_unknown"], "req_elevator": ["ignore"], "req_pets": ["ignore"],
     "delivery_mode": ["digest"], "digest_hour": ["9"], "stop_words": ["skip"],
+    # шаги мгновенной доставки: при "digest" скрыты, но пусть ответ будет —
+    # иначе смена режима в ANSWERS роняет прогон
+    "quiet": ["23-8"], "max_per_day": ["10"],
 }
 
 
