@@ -24,6 +24,8 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+
 from bot import cards
 from core import market as market_mod
 from core.store import Store
@@ -128,6 +130,11 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
                              reasons=facts.get("reasons"), history=history, prefix=prefix,
                              own_medians=await market_mod.medians(store))
             sent.append(facts["listing_id"])
+        except TelegramForbiddenError:
+            # Человек заблокировал бота. Ловить это здесь нельзя: карточка
+            # осталась бы неотправленной и вернулась на следующем круге, и так
+            # вечно. Пусть решает deliver_all — он отключит профиль.
+            raise
         except Exception as e:                       # noqa: BLE001
             log.warning("не отправилось %s: %s", facts["listing_id"], e)
     if sent:
@@ -174,12 +181,33 @@ async def deliver_digest(bot, store: Store, profile: dict, force: bool = False) 
 
 
 async def deliver_all(bot, store: Store) -> dict:
-    """Один проход доставки по всем активным профилям."""
-    stats = {"realtime": 0, "digest": 0, "profiles": 0}
+    """Один проход доставки по всем активным профилям.
+
+    Каждый профиль обрабатывается отдельно от остальных. Пока пользователь был
+    один, это ничего не значило; со вторым — значит всё: заблокировавший бота
+    человек ронял бы задачу доставки целиком, и остальные переставали получать
+    что-либо. Причём молча, потому что падает фоновая задача, а не запрос.
+    """
+    stats = {"realtime": 0, "digest": 0, "profiles": 0, "failed": 0}
     for profile in await store.active_profiles():
         stats["profiles"] += 1
-        if profile.get("delivery_mode") == "realtime":
-            stats["realtime"] += await deliver_realtime(bot, store, profile)
-        else:
-            stats["digest"] += await deliver_digest(bot, store, profile)
+        try:
+            if profile.get("delivery_mode") == "realtime":
+                stats["realtime"] += await deliver_realtime(bot, store, profile)
+            else:
+                stats["digest"] += await deliver_digest(bot, store, profile)
+        except TelegramForbiddenError:
+            # Бот заблокирован или чат удалён — писать туда больше некуда.
+            # Отмечаем пользователя неактивным, иначе каждые пять минут будет
+            # одна и та же ошибка.
+            log.warning("профиль %s: бот заблокирован, отключаю пользователя %s",
+                        profile["id"], profile["user_id"])
+            await store.set_user(profile["user_id"], is_active=0)
+            stats["failed"] += 1
+        except TelegramRetryAfter as e:
+            log.warning("профиль %s: Telegram просит подождать %s с", profile["id"], e.retry_after)
+            stats["failed"] += 1
+        except Exception as e:                        # noqa: BLE001
+            log.exception("профиль %s: доставка не удалась: %s", profile["id"], e)
+            stats["failed"] += 1
     return stats

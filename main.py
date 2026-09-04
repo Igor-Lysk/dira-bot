@@ -15,7 +15,7 @@
 import asyncio
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -84,8 +84,29 @@ async def main():
 
     scheduler = AsyncIOScheduler(timezone=settings.TIMEZONE)
 
+    _budget_warned = {"at": None}
+
     async def job_enrich():
         if client is None:
+            return
+        # Предохранитель по деньгам. Города выбирает пользователь, а регистрация
+        # открытая: восемь городов у одного человека — вчетверо больший поток
+        # через модель. Дневной расход обычно около доллара, так что упереться
+        # в потолок можно только при аварии, и тогда лучше остановиться.
+        spent = (await store.spend(days=1)).get("usd") or 0
+        if spent >= settings.DAILY_LLM_BUDGET_USD:
+            today = date.today().isoformat()
+            if _budget_warned["at"] != today:
+                _budget_warned["at"] = today
+                log.warning("дневной бюджет на модель исчерпан: $%s", spent)
+                for admin in await store.admins():
+                    try:
+                        await bot.send_message(
+                            admin, f"Дозаполнение остановлено: за сутки на модель ушло "
+                                   f"${spent} при пределе ${settings.DAILY_LLM_BUDGET_USD}. "
+                                   f"Обычный расход — около доллара, так что это похоже на сбой.")
+                    except Exception as e:              # noqa: BLE001
+                        log.warning("не смог предупредить админа: %s", e)
             return
         result = await pipeline.enrich_pending(store, client, settings.CLAUDE_MODEL,
                                                limit=settings.ENRICH_BATCH)
@@ -102,9 +123,9 @@ async def main():
 
     async def job_deliver():
         stats = await delivery.deliver_all(bot, store)
-        if stats["realtime"] or stats["digest"]:
-            log.info("отправлено: realtime %d, дайджест %d",
-                     stats["realtime"], stats["digest"])
+        if stats["realtime"] or stats["digest"] or stats.get("failed"):
+            log.info("отправлено: realtime %d, дайджест %d, сбоев %d",
+                     stats["realtime"], stats["digest"], stats.get("failed", 0))
 
     async def _collect_board(name, fetch):
         """Общая обвязка для досок объявлений: собрать и прогнать через пайплайн.

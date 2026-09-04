@@ -11,13 +11,14 @@
 """
 
 import logging
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import (CallbackQuery, InlineKeyboardButton,
+from aiogram.types import (CallbackQuery, ErrorEvent, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message, TelegramObject)
 
 from bot import cards, wizard
@@ -238,7 +239,7 @@ async def cmd_start(message: Message, user: dict, store: Store):
     user = await store.get_user(user["telegram_id"])
     await message.answer(
         "Ищу квартиры в аренду и присылаю подходящие.\n\n"
-        "Сейчас настроим, что именно искать — десять коротких вопросов. "
+        "Сейчас настроим, что именно искать — несколько коротких вопросов. "
         "Ответы сохраняются на каждом шаге, так что можно прерваться и вернуться.",
         parse_mode=ParseMode.HTML)
     await _ask(message, user, store)
@@ -450,6 +451,30 @@ async def cmd_stats(message: Message, user: dict, store: Store):
         f"Расход модели за 30 дней: ${spend.get('usd') or 0} "
         f"({spend.get('calls') or 0} вызовов)",
         parse_mode=ParseMode.HTML)
+
+
+@router.errors()
+async def on_error(event: ErrorEvent):
+    """Последний рубеж: до второго пользователя необработанное исключение видел
+    только лог, а человек — пустоту в ответ на нажатую кнопку. Постороннему это
+    неотличимо от «бот умер», и он просто уходит. Поэтому: подробности в лог,
+    человеку — одна честная строка."""
+    log.exception("необработанная ошибка: %s", event.exception)
+    update = event.update
+    target = None
+    if getattr(update, "message", None):
+        target = update.message
+    elif getattr(update, "callback_query", None):
+        with suppress(Exception):
+            await update.callback_query.answer("Не получилось", show_alert=False)
+        target = update.callback_query.message
+    if target is None:
+        return True
+    with suppress(Exception):
+        await target.answer(
+            "Что-то сломалось на моей стороне — я записал ошибку. "
+            "Попробуй ещё раз или напиши /start.")
+    return True
 
 
 def build(token: str, store: Store):
