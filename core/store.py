@@ -324,7 +324,7 @@ class Store:
             "SELECT m.rank, m.reasons, l.*, f.* FROM matches m"
             " JOIN listings l ON l.id = m.listing_id"
             " LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
-            " WHERE m.profile_id=? AND m.state='new'"
+            " WHERE m.profile_id=? AND m.state='new' AND m.stale_at IS NULL"
             # Одно объявление одному человеку — не чаще раза в сутки, чем бы
             # ни было вызвано возвращение в очередь. Предел поверх всех причин:
             # проще проверить одно правило, чем каждый раз доказывать, что
@@ -379,6 +379,7 @@ class Store:
             f" JOIN listings l ON l.id = m.listing_id"
             f" LEFT JOIN listing_facts f ON f.listing_id = m.listing_id"
             f" WHERE m.profile_id=? AND m.state IN ({placeholders})"
+            f"   AND m.stale_at IS NULL"
             f"{age}{filters.get(flt, '')}"
             f" ORDER BY {orders.get(order, orders['rank'])} LIMIT ? OFFSET ?",
             (profile_id, *states, limit, offset))

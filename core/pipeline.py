@@ -311,6 +311,11 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
         if result.matched:
             if await store.add_match(profile_id, lid, result.rank, result.reasons):
                 created += 1
+            else:
+                # Подходит снова — например, человек вернул прежний потолок
+                await store._db.execute(
+                    "UPDATE matches SET stale_at=NULL WHERE profile_id=? AND listing_id=?"
+                    "  AND stale_at IS NOT NULL", (profile_id, lid))
         else:
             # Сужение критериев должно убирать лишнее, а не только добавлять
             # новое. Иначе человек ставит потолок 5000, а в ленте остаются
@@ -324,6 +329,14 @@ async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: 
                 "DELETE FROM matches WHERE profile_id=? AND listing_id=? AND state='new'"
                 " AND sent_at IS NULL", (profile_id, lid))
             dropped += cur.rowcount or 0
+            # Отправленное не удаляем, а помечаем: запись о том, что человеку
+            # это показывали, нужна и для защиты от повторов, и для статистики.
+            # Но в ленте ему не место — иначе при потолке 5000 там висит
+            # квартира за 7500, подобранная под прежние настройки.
+            await store._db.execute(
+                "UPDATE matches SET stale_at=datetime('now')"
+                " WHERE profile_id=? AND listing_id=? AND stale_at IS NULL",
+                (profile_id, lid))
     await store._db.commit()
     log.info("профиль %s: пересчёт по %d объявлениям, новых совпадений %d, убрано %d",
              profile_id, len(ids), created, dropped)
