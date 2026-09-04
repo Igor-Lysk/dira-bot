@@ -82,9 +82,15 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
     # компактный список, а карточка остаётся тем, чем задумана: одной находкой.
     if len(queue) >= BURST_TO_LIST:
         own = await market_mod.medians(store)
+        # После тихих часов это накопленное за ночь, в середине дня — просто
+        # пачка сразу. Заголовок называет вещи как есть: «пока тебя не
+        # беспокоили» в три часа дня выглядело бы враньём.
+        after_quiet = profile.get("quiet_to") is not None and _now().hour == profile["quiet_to"]
+        total = len(await store.queue_for(profile["id"], limit=1000))
         await bot.send_message(
             profile["user_id"],
-            cards.digest(queue, title="Пока тебя не беспокоили", own_medians=own),
+            cards.digest(queue, total=total, own_medians=own,
+                         title="Пока тебя не беспокоили" if after_quiet else "Сразу несколько"),
             parse_mode="HTML", disable_web_page_preview=True)
         await store.mark_sent(profile["id"], [f["listing_id"] for f in queue])
         return len(queue)

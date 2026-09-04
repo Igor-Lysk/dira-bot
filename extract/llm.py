@@ -135,6 +135,27 @@ def _try(text: str):
     return None
 
 
+def _repair_truncated(text: str):
+    """Обрезанный ответ: собрать то, что успело прийти.
+
+    Модель иногда останавливается на середине объекта, и сейчас такой ответ
+    пропадал целиком — вместе с десятком уже названных полей. Отрезаем
+    незаконченную пару и закрываем скобку: половина фактов лучше, чем ноль,
+    а недостающие поля всё равно останутся в списке «нет данных».
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    head = text[start:]
+    for idx in range(len(head) - 1, 0, -1):
+        if head[idx] != ",":
+            continue
+        result = _try(head[:idx] + "}")
+        if isinstance(result, dict) and result:
+            return result
+    return None
+
+
 def parse_response(raw: str) -> dict:
     """Достать JSON из ответа модели. Пустой словарь, если не вышло."""
     text = (raw or "").strip()
@@ -166,7 +187,16 @@ def parse_response(raw: str) -> dict:
                         return result
                     break
 
-    log.warning("не разобрал ответ модели (%d символов): %r", len(text), text[:80])
+    salvaged = _repair_truncated(text)
+    if salvaged is not None:
+        log.warning("ответ модели оборван, собрано %d полей из обрезка (%d символов)",
+                    len(salvaged), len(text))
+        return salvaged
+
+    # В лог идут начало и конец: по ним видно, чем это было — обрывом на
+    # середине или мусором вокруг JSON.
+    log.warning("не разобрал ответ модели (%d символов): %r … %r",
+                len(text), text[:80], text[-80:])
     return {}
 
 
@@ -271,6 +301,9 @@ async def fill_gaps(text: str, facts: Facts, client, model: str) -> Tuple[Facts,
         log.warning("вызов модели не удался: %s", e)
         return facts, {"ok": False, "error": str(e)}
 
+    stop = getattr(message, "stop_reason", None)
+    if stop and stop != "end_turn":
+        log.warning("модель остановилась по причине %s — ответ может быть неполным", stop)
     payload = parse_response(message.content[0].text)
     facts = merge(facts, payload)
     usage = getattr(message, "usage", None)
