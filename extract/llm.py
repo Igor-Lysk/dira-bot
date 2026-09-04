@@ -304,7 +304,13 @@ async def fill_gaps(text: str, facts: Facts, client, model: str) -> Tuple[Facts,
     stop = getattr(message, "stop_reason", None)
     if stop and stop != "end_turn":
         log.warning("модель остановилась по причине %s — ответ может быть неполным", stop)
-    payload = parse_response(message.content[0].text)
+    # Ответ бывает разбит на несколько текстовых блоков, и чтение только первого
+    # выглядело как обрыв на середине объекта: JSON без закрывающей скобки при
+    # stop_reason «end_turn».
+    blocks = [b.text for b in message.content if getattr(b, "type", "text") == "text"]
+    if len(blocks) > 1:
+        log.info("ответ модели пришёл %d блоками", len(blocks))
+    payload = parse_response("".join(blocks))
     facts = merge(facts, payload)
     usage = getattr(message, "usage", None)
     tokens_in = getattr(usage, "input_tokens", 0)
