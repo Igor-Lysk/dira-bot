@@ -225,6 +225,9 @@ DISTRICT_PATTERNS = [
     ('Florentin',              r'(?:פלורנטין|florentin)'),
     ('Shapira',                r'(?:שפירא|shapira)'),
     # Jaffa — word boundary via Hebrew-letter negative lookaround (P3)
+    # Приставки к «יפו» намеренно не ловим. Проверка на корпусе: они добавляют
+    # 30 верных попаданий и 22 ошибки — «15 דקות ברגל מיפו» это квартира в
+    # Бат-Яме, а не в Яффо, и «ואתם ביפו/תל אביב» тоже про дорогу, а не про адрес.
     ('Jaffa',                  r'(?:(?<![א-ת])יפו(?![א-ת])|jaffa|яффо)'),
     ('Bavli',                  r'(?:בבלי|bavli|יוסף פעמוני)'),
     ("Neve Sha'anan",          r'(?:נווה שאנן|neve.?shaanan|צנחנים)'),
@@ -255,10 +258,67 @@ DISTRICT_PATTERNS = [
     ('Bnei Brak',              r'(?:בני ברק|bnei.?brak)'),
 ]
 
+# «תל אביב יפו» — официальное имя города целиком, а не упоминание Яффо.
+# Живой прогон: квартиры на Уссишкина и Ибн-Габироль, то есть старый север и
+# центр, уезжали в Jaffa, потому что агрегатор пишет город полным именем.
+_TLV_FULL_NAME = re.compile(r'ת(?:ל[\s-]*אביב|["\'״]?א)[\s,-]*יפו')
+
+
 def extract_district(txt):
+    txt = _TLV_FULL_NAME.sub('תל אביב', txt)
     for name, pattern in DISTRICT_PATTERNS:
         if re.search(pattern, txt, re.IGNORECASE):
             return name
+    return None
+
+
+# ── Улица ───────────────────────────────────────────────────────────────────
+# Улицу до сих пор называла только модель. Между тем каналы-агрегаторы пишут её
+# размеченной строкой («מיקום: תל אביב יפו, אוסישקין 44»), и брать её оттуда
+# правилами и точнее, и бесплатно. Заодно это даёт ключ для склейки повторов:
+# одну квартиру публикуют разные маклеры, и совпадение адреса — единственное,
+# что их связывает.
+
+_STREET_LABEL = re.compile(
+    r'(?:מיקום|כתובת|רחוב|ברחוב|адрес|улица|address|street)\s*[:：]?\s*\**\s*(.+)',
+    re.IGNORECASE)
+
+# Слова, которые сами по себе улицей не являются: города, служебные пометки.
+_NOT_STREET = re.compile(
+    r'^(?:תל[\s־-]*אביב|יפו|רמת[\s־-]*גן|גבעתיים|בת[\s־-]*ים|חולון|בני[\s־-]*ברק|'
+    r'הרצליה|פתח[\s־-]*תקווה|רעננה|נתניה|ירושלים|חיפה|באר[\s־-]*שבע|'
+    r'מרכז|צפון|דרום|מזרח|מערב|שכונ\w*|אזור|איזור|קומה|דירה|כללי|'
+    r'tel[\s-]*aviv|jaffa|ramat[\s-]*gan|givatayim|bat[\s-]*yam|holon)$',
+    re.IGNORECASE)
+
+_STREET_OK = re.compile(r'^[א-ת][א-ת\'"״׳\s.\-]{1,28}(?:\s*\d{1,4}[א-ת]?)?$')
+
+
+def extract_street(txt):
+    """Улица с номером дома из размеченной строки. None, если не уверены.
+
+    Берётся только явная строка «מיקום»/«כתובת»: свободный текст даёт слишком
+    много ложных срабатываний, а размеченная строка — ровно то, ради чего
+    агрегаторы её и пишут.
+    """
+    for line in (txt or "").splitlines():
+        line = line.replace("*", " ").strip()
+        match = _STREET_LABEL.search(line)
+        if not match:
+            continue
+        value = match.group(1).strip(" .·|—-")
+        # «город, улица, номер» — город отбрасываем, номер приклеиваем к улице
+        parts = [p.strip() for p in re.split(r'[,،|]', value) if p.strip()]
+        if not parts:
+            continue
+        if len(parts) >= 2 and re.fullmatch(r'\d{1,4}[א-ת]?', parts[-1]):
+            parts = parts[:-2] + [f"{parts[-2]} {parts[-1]}"]
+        for candidate in reversed(parts):
+            candidate = candidate.strip(" .·|—-")
+            if _NOT_STREET.match(candidate):
+                continue
+            if _STREET_OK.match(candidate):
+                return re.sub(r'\s+', ' ', candidate)
     return None
 
 

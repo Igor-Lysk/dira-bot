@@ -512,6 +512,7 @@ def extract(text: str) -> Facts:
     f.area_sqm = _area(text)
     f.floor, f.total_floors = _extract_floor(text)
     f.district = rules.extract_district(text)
+    f.street = rules.extract_street(text)
     f.city = _city(text) or (rules.get_city(f.district) if f.district else None)
     f.deal_type = _deal_type(text)
     # extract_phones возвращает множество — приводим к списку, иначе не сериализуется

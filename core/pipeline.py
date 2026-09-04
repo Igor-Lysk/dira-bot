@@ -87,9 +87,12 @@ def facts_to_row(facts) -> dict:
 async def _find_repost(store: Store, facts, fingerprint: str, raw_text: str = "") -> Optional[dict]:
     """Та же квартира под другим сообщением.
 
-    Сначала по отпечатку текста — ловит точные перепечатки. Затем по связке
-    «телефон + количество комнат», которая переживает переписанный заголовок:
-    именно на нём ломался отпечаток v1, где бралось только начало текста.
+    Три ключа по убыванию надёжности: отпечаток текста ловит точные
+    перепечатки; связка «телефон + комнаты» переживает переписанный заголовок,
+    на котором ломался отпечаток v1; связка «улица + цена + комнаты» ловит
+    случай, когда одну квартиру публикуют разные маклеры со своими номерами.
+    Два последних ключа подтверждаются похожестью текста — без неё у агента с
+    десятком трёхкомнатных квартир склеивается всё подряд.
     """
     same_text = await store.find_by_fingerprint(fingerprint)
     if same_text:
@@ -123,6 +126,26 @@ async def _find_repost(store: Store, facts, fingerprint: str, raw_text: str = ""
             continue
         # Последняя проверка — сам текст. Цена и число комнат совпадают у многих
         # разных квартир одного маклера; описание — нет.
+        if text_similarity(raw_text, row.get("raw_text") or "") >= REPOST_TEXT_SIMILARITY:
+            return row
+
+    # Третий ключ — сам объект: улица, цена и комнаты вместе. Нужен там, где
+    # телефон не совпадает: одну и ту же квартиру публикуют разные маклеры, и
+    # в живой выдаче она пришла дважды подряд — «אוסישקין 44, 8500 ₪, 3к» от
+    # двух агентов с разными номерами. Требование полного совпадения адреса,
+    # цены и комнат плюс похожий текст делает ложную склейку маловероятной:
+    # это должны быть две разные квартиры в одном доме за одни деньги.
+    if not (facts.street and facts.price and facts.rooms is not None):
+        return None
+    cur = await store._db.execute(
+        "SELECT l.*, f.price AS prev_price, f.street AS prev_street"
+        " FROM listings l JOIN listing_facts f ON f.listing_id = l.id"
+        " WHERE f.street = ? AND f.price = ? AND f.rooms = ?"
+        "   AND l.collected_at >= datetime('now', ?)"
+        " ORDER BY l.collected_at DESC LIMIT 5",
+        (facts.street, facts.price, facts.rooms, f"-{REPOST_WINDOW_DAYS} days"))
+    for row in await cur.fetchall():
+        row = dict(row)
         if text_similarity(raw_text, row.get("raw_text") or "") >= REPOST_TEXT_SIMILARITY:
             return row
     return None
