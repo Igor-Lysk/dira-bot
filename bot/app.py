@@ -52,16 +52,14 @@ class AuthMiddleware(BaseMiddleware):
         доступ, если пришёл кто-то посторонний."""
         if bot is None:
             return
+        from core import notify
         name = user.get("first_name") or "без имени"
         handle = f"@{user['username']}" if user.get("username") else "без ника"
-        for admin in await self.store.admins():
-            if admin == user.get("telegram_id"):
-                continue
-            with suppress(Exception):
-                await bot.send_message(
-                    admin,
-                    f"Новый пользователь: {name}, {handle}, id {user['telegram_id']}.\n"
-                    f"Закрыть доступ: /block {user['telegram_id']}")
+        await notify.notify_admins(
+            bot, self.store,
+            f"Новый пользователь: {name}, {handle}, id <code>{user['telegram_id']}</code>.\n"
+            f"Закрыть доступ: /block {user['telegram_id']}",
+            exclude=user.get("telegram_id"))
 
     async def __call__(self, handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
                        event: TelegramObject, data: Dict[str, Any]) -> Any:
@@ -442,12 +440,11 @@ async def on_wrong_field(callback: CallbackQuery, user: dict, store: Store):
         f"Записал: {label.lower()}. Разберу это объявление заново — "
         f"обычно в течение десяти минут." if ok else
         "Объявление уже не в базе, но жалобу записал.")
-    for admin in await store.admins():
-        if admin == user["telegram_id"]:
-            continue
-        with suppress(Exception):
-            await callback.bot.send_message(
-                admin, f"Жалоба на данные: {label.lower()}, объявление {listing_id}")
+    from core import notify
+    await notify.notify_admins(
+        callback.bot, store,
+        f"Жалоба на данные: {label.lower()}, объявление <code>{listing_id}</code>",
+        exclude=user["telegram_id"])
 
 
 # ── настройки и статистика ───────────────────────────────────────────────────
@@ -487,26 +484,34 @@ async def cmd_block(message: Message, user: dict, store: Store):
     """Закрыть или открыть доступ. Только для администратора."""
     if not user.get("is_admin"):
         return
+    from core import notify
     parts = (message.text or "").split()
     if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-        await message.answer("Кого закрыть? /block <id>, обратно — /unblock <id>")
+        await message.answer(notify.admin_text("Кого закрыть? /block &lt;id&gt;, "
+                                               "обратно — /unblock &lt;id&gt;"),
+                             parse_mode=ParseMode.HTML)
         return
     target = int(parts[1])
     await store.set_user(target, is_active=0)
-    await message.answer(f"Доступ для {target} закрыт. Вернуть — /unblock {target}")
+    await message.answer(notify.admin_text(f"Доступ для {target} закрыт. "
+                                           f"Вернуть — /unblock {target}"),
+                         parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("unblock"))
 async def cmd_unblock(message: Message, user: dict, store: Store):
     if not user.get("is_admin"):
         return
+    from core import notify
     parts = (message.text or "").split()
     if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-        await message.answer("Кому открыть? /unblock <id>")
+        await message.answer(notify.admin_text("Кому открыть? /unblock &lt;id&gt;"),
+                             parse_mode=ParseMode.HTML)
         return
     target = int(parts[1])
     await store.set_user(target, is_active=1)
-    await message.answer(f"Доступ для {target} открыт.")
+    await message.answer(notify.admin_text(f"Доступ для {target} открыт."),
+                         parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("health"))
@@ -514,11 +519,12 @@ async def cmd_health(message: Message, user: dict, store: Store):
     """Показатели против ожиданий. Только для администратора."""
     if not user.get("is_admin"):
         return
-    from core import health, settings
+    from core import health, notify, settings
     checks = await health.collect(store, settings.DB_PATH)
     bad = health.failures(checks)
     head = "Всё сходится" if not bad else f"Не сходится: {len(bad)}"
-    await message.answer(f"<b>{head}</b>\n\n{health.report(checks)}", parse_mode=ParseMode.HTML)
+    await message.answer(notify.admin_text(f"<b>{head}</b>\n\n{health.report(checks)}"),
+                         parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("pause"))

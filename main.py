@@ -23,7 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from bot.app import build
 from collectors import homeless, komo, yad2
 from collectors.telegram_v2 import TelegramMonitor
-from core import delivery, health, pipeline, settings
+from core import delivery, health, notify, pipeline, settings
 from core.sources import channels_for
 from core.store import Store
 from db.migrate import migrate
@@ -99,14 +99,11 @@ async def main():
             if _budget_warned["at"] != today:
                 _budget_warned["at"] = today
                 log.warning("дневной бюджет на модель исчерпан: $%s", spent)
-                for admin in await store.admins():
-                    try:
-                        await bot.send_message(
-                            admin, f"Дозаполнение остановлено: за сутки на модель ушло "
-                                   f"${spent} при пределе ${settings.DAILY_LLM_BUDGET_USD}. "
-                                   f"Обычный расход — около доллара, так что это похоже на сбой.")
-                    except Exception as e:              # noqa: BLE001
-                        log.warning("не смог предупредить админа: %s", e)
+                await notify.notify_admins(
+                    bot, store,
+                    f"Дозаполнение остановлено: за сутки на модель ушло ${spent} "
+                    f"при пределе ${settings.DAILY_LLM_BUDGET_USD}. Обычный расход — "
+                    f"около доллара, так что это похоже на сбой.")
             return
         result = await pipeline.enrich_pending(store, client, settings.CLAUDE_MODEL,
                                                limit=settings.ENRICH_BATCH)
@@ -192,12 +189,9 @@ async def main():
         log.warning("самопроверка: не сходится %s", ", ".join(bad))
         if not fresh:
             return
-        text = "Самопроверка нашла расхождения:\n\n" + health.report(checks, only_bad=True)
-        for admin in await store.admins():
-            try:
-                await bot.send_message(admin, text)
-            except Exception as e:                  # noqa: BLE001
-                log.warning("не смог отправить отчёт самопроверки: %s", e)
+        await notify.notify_admins(
+            bot, store,
+            "Самопроверка нашла расхождения:\n\n" + health.report(checks, only_bad=True))
 
     async def job_memory():
         """Предупредить администратора, пока память ещё есть.
@@ -218,14 +212,11 @@ async def main():
         if _memory_warned["at"] == today:             # не чаще раза в сутки
             return
         _memory_warned["at"] = today
-        for admin in await store.admins():
-            try:
-                await bot.send_message(
-                    admin, f"На сервере осталось {free_mb} МБ свободной памяти "
-                           f"(порог {settings.MEMORY_WARN_MB}). Стоит посмотреть, "
-                           f"что её ест: `docker stats`.")
-            except Exception as e:                    # noqa: BLE001
-                log.warning("предупреждение о памяти не ушло: %s", e)
+        await notify.notify_admins(
+            bot, store,
+            f"На сервере осталось {free_mb} МБ свободной памяти "
+            f"(порог {settings.MEMORY_WARN_MB}). Стоит посмотреть, что её ест: "
+            f"<code>docker stats</code>.")
         log.warning("мало памяти: %d МБ", free_mb)
 
     async def job_healthcheck():
