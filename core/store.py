@@ -7,9 +7,13 @@
 """
 
 import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Optional
 
 import aiosqlite
+
+from core import settings
 
 # Списки и словари в SQLite лежат строками JSON. Разворачиваем на границе,
 # чтобы дальше по коду с ними работали как с обычными списками.
@@ -32,6 +36,17 @@ def _row(row: Optional[aiosqlite.Row]) -> Optional[dict]:
 
 def _rows(rows) -> list:
     return [_row(r) for r in rows]
+
+
+def local_day_start_utc() -> str:
+    """Начало текущих местных суток, выраженное в UTC.
+
+    В базе всё время хранится в UTC (`datetime('now')`), а «сегодня» для
+    человека — израильское. Между ними три часа, и на этой разнице держались бы
+    все суточные счётчики."""
+    tz = ZoneInfo(settings.TIMEZONE)
+    start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _presence_sql() -> str:
@@ -399,9 +414,15 @@ class Store:
         await self._db.commit()
 
     async def sent_today(self, profile_id: int) -> int:
+        """Сколько ушло этому профилю с начала суток — израильских, не UTC.
+
+        `date('now')` в SQLite — это полночь по Гринвичу, то есть три часа ночи
+        в Израиле. Дневной предел сбрасывался бы посреди ночи, и отправленное
+        между полуночью и тремя считалось бы за вчера. Все отметки в базе
+        хранятся в UTC, поэтому границу считаем в Python и передаём готовой."""
         cur = await self._db.execute(
-            "SELECT COUNT(*) FROM matches WHERE profile_id=? AND sent_at >= date('now')",
-            (profile_id,))
+            "SELECT COUNT(*) FROM matches WHERE profile_id=? AND sent_at >= ?",
+            (profile_id, local_day_start_utc()))
         return (await cur.fetchone())[0]
 
     # ── действия и расход ────────────────────────────────────────────────────

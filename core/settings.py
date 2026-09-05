@@ -52,6 +52,10 @@ MEMORY_CHECK_INTERVAL_MIN = 30
 # и сутки уходят до того, как расхождение заметно.
 HEALTH_CHECK_INTERVAL_MIN = 60
 
+# Проверка «а не молчит ли бот впустую». Раз в шесть часов достаточно: сама
+# новость — трёхсуточной давности.
+SILENCE_CHECK_INTERVAL_MIN = 360
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 TIMEZONE = "Asia/Jerusalem"
 

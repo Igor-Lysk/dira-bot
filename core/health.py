@@ -153,11 +153,72 @@ async def collect(store: Store, db_path: Optional[str] = None) -> list:
         mb = os.path.getsize(db_path) / 1024 / 1024
         checks.append(Check("db_size", mb <= MAX_DB_MB, f"база: {mb:.1f} МБ (порог {MAX_DB_MB})"))
 
-    # 9. Мусор — справочно, порога нет.
+    # 9. Приток и находки за сутки — справочно. Нужно затем, что молчание бота
+    #    неотличимо от поломки, пока рядом нет числа. «За сутки собрано 10,
+    #    подошло 0» отвечает на вопрос сразу, а «сообщений не было» — нет.
+    got = await _one(db, "SELECT COUNT(*) FROM listings"
+                         " WHERE collected_at >= datetime('now','-1 day')") or 0
+    # Считаем не «созданные за сутки совпадения», а «совпадения по собранным за
+    # сутки объявлениям». Разница существенная: пересчёт профиля создаёт
+    # совпадения по старым объявлениям, и вчерашняя правка критериев рисовала бы
+    # бодрую картину при мёртвом потоке.
+    matched = await _one(db,
+        "SELECT COUNT(*) FROM matches m JOIN listings l ON l.id = m.listing_id"
+        " WHERE l.collected_at >= datetime('now','-1 day')") or 0
+    checks.append(Check("intake_day", True,
+                        f"за сутки собрано {got}, из них подошло кому-нибудь {matched}"))
+
+    # 10. Мусор — справочно, порога нет.
     junk = await _one(db, "SELECT COUNT(*) FROM listings WHERE junk_reason IS NOT NULL") or 0
     checks.append(Check("junk", True, f"признано не объявлениями: {junk}"))
 
     return checks
+
+
+SILENCE_DAYS = 3          # столько суток без единой находки — уже не совпадение
+
+
+async def silent_profiles(store: Store, days: int = SILENCE_DAYS) -> list:
+    """Профили, которым за `days` суток не подошло ничего.
+
+    Возвращает [(профиль, сколько объявлений прошло мимо, топ причин)].
+    Молчание бота выглядит одинаково и когда рынок пуст, и когда критерии не
+    оставляют шансов. Разницу знает только бот: у него есть и поток, и причина
+    отказа по каждому объявлению. Значит ему и говорить.
+    """
+    from collections import Counter
+
+    from core import market as market_mod
+    from core.match import match
+
+    out = []
+    own = await market_mod.medians(store)
+    cur = await store._db.execute(
+        "SELECT l.id, f.* FROM listing_facts f JOIN listings l ON l.id = f.listing_id"
+        " WHERE l.collected_at >= datetime('now', ?) AND l.junk_reason IS NULL",
+        (f"-{days} days",))
+    rows = [dict(r) for r in await cur.fetchall()]
+    if not rows:
+        return out
+
+    for profile in await store.active_profiles():
+        # Именно «подошло что-то из свежесобранного», а не «появилась строка в
+        # matches»: пересчёт профиля создаёт совпадения по объявлениям недельной
+        # давности, и тишина на живом потоке осталась бы незамеченной.
+        found = await _one(
+            store._db,
+            "SELECT COUNT(*) FROM matches m JOIN listings l ON l.id = m.listing_id"
+            " WHERE m.profile_id=? AND l.collected_at >= datetime('now', ?)",
+            profile["id"], f"-{days} days") or 0
+        if found:
+            continue
+        reasons = Counter()
+        for row in rows:
+            result = match(row, profile, market=market_mod.assess(row, own))
+            if not result.matched and result.rejected_by:
+                reasons[result.rejected_by] += 1
+        out.append((profile, len(rows), reasons.most_common(3)))
+    return out
 
 
 def report(checks: list, only_bad: bool = False) -> str:

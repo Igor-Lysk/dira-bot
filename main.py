@@ -193,6 +193,32 @@ async def main():
             bot, store,
             "Самопроверка нашла расхождения:\n\n" + health.report(checks, only_bad=True))
 
+    async def job_silence():
+        """Сказать человеку, если по его критериям третьи сутки пусто.
+
+        Молчание бота читается как поломка — это уже проверено на живом
+        человеке. При этом отличить «рынок пуст» от «критерии не оставляют
+        шансов» может только бот: у него есть и поток объявлений, и причина
+        отказа по каждому. Раз в трое суток, не чаще."""
+        today = date.today().isoformat()
+        for profile, seen, reasons in await health.silent_profiles(store):
+            if profile.get("silence_notice_on") == today:
+                continue
+            lines = [f"За трое суток по твоим критериям не нашлось ничего.",
+                     f"Через бота за это время прошло {seen} объявлений."]
+            if reasons:
+                lines.append("")
+                lines.append("Чаще всего мешало:")
+                lines += [f"• {why} — {n}" for why, n in reasons]
+            lines.append("")
+            lines.append("Это не поломка: столько сейчас на рынке по таким условиям. "
+                         "Если хочется больше вариантов — /settings.")
+            try:
+                await bot.send_message(profile["user_id"], "\n".join(lines))
+                await store.update_profile(profile["id"], silence_notice_on=today)
+            except Exception as e:                    # noqa: BLE001
+                log.warning("не смог сказать о тишине профилю %s: %s", profile["id"], e)
+
     async def job_memory():
         """Предупредить администратора, пока память ещё есть.
 
@@ -248,6 +274,7 @@ async def main():
         (job_healthcheck, settings.HEALTHCHECK_INTERVAL_MIN, "healthcheck", 30),
         (job_memory, settings.MEMORY_CHECK_INTERVAL_MIN, "memory", 45),
         (job_health, settings.HEALTH_CHECK_INTERVAL_MIN, "health", 300),
+        (job_silence, settings.SILENCE_CHECK_INTERVAL_MIN, "silence", 420),
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
         (job_details, settings.DETAILS_INTERVAL_MIN, "details", 180),
