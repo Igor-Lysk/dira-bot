@@ -33,7 +33,13 @@ SPEND_SPIKE_FACTOR = 3.0         # во столько раз сутки дор�
 SPEND_SPIKE_FLOOR = 0.5          # ниже этого скачки не стоят внимания, $
 MAX_QUEUE = 300                  # объявлений в очереди к модели
 MAX_PENDING = 50                 # застрявших в повторной обработке
-QUIET_COLLECTORS_HOURS = 8       # столько без единого нового объявления
+# Столько часов без единого нового объявления. Восемь оказались тесны: на живых
+# каналах ночной перерыв стабильно 6.7 часа (последний пост около полуночи по
+# Израилю, первый — в шесть утра), а на неделе встретился и десятичасовой. При
+# пороге в восемь предупреждение приходило почти каждую ночь и переставало
+# что-либо значить. Четырнадцать — это заведомо больше любого наблюдённого
+# перерыва и всё ещё меньше суток.
+QUIET_COLLECTORS_HOURS = 14
 MAX_STUCK_ATTEMPTS = 20          # объявлений, упёршихся в предел попыток
 MAX_DB_MB = 500
 
@@ -111,8 +117,12 @@ async def collect(store: Store, db_path: Optional[str] = None) -> list:
         " WHERE f.llm_at IS NULL AND f.source_layer <> 'source'"
         "   AND l.status = 'extracted' AND l.junk_reason IS NULL"
         "   AND f.llm_attempts < 3" + city_clause, *params) or 0
-    checks.append(Check("queue", queue <= MAX_QUEUE,
-                        f"в очереди к модели: {queue} (порог {MAX_QUEUE})"))
+    # Без активных профилей дозаполнение не работает вовсе, и очередь растёт по
+    # замыслу: тревожиться тут не о чем, пока никто не ищет.
+    checks.append(Check("queue", queue <= MAX_QUEUE or not profiles,
+                        f"в очереди к модели: {queue}" +
+                        (" (никто не ищет, дозаполнение стоит)" if not profiles
+                         else f" (порог {MAX_QUEUE})")))
 
     # 4. Приток объявлений. Молчащий сборщик выглядит как спокойный день.
     last = await _one(db, "SELECT MAX(collected_at) FROM listings")
@@ -138,15 +148,30 @@ async def collect(store: Store, db_path: Optional[str] = None) -> list:
     checks.append(Check("attempts", stuck < MAX_STUCK_ATTEMPTS,
                         f"упёрлись в предел попыток за сутки: {stuck} (порог {MAX_STUCK_ATTEMPTS})"))
 
-    # 7. Доставка. Профиль с непустой очередью, которому сутки ничего не ушло, —
-    #    это либо тихие часы длиной в день, либо поломка.
-    silent = await _one(db,
-        "SELECT COUNT(*) FROM search_profiles p WHERE p.is_paused = 0 AND p.is_enabled = 1"
-        "   AND EXISTS (SELECT 1 FROM matches m WHERE m.profile_id = p.id AND m.state = 'new')"
-        "   AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.profile_id = p.id"
-        "                     AND m.sent_at >= datetime('now','-1 day'))") or 0
-    checks.append(Check("delivery", silent == 0,
-                        f"профилей с непустой очередью и без отправок за сутки: {silent}"))
+    # 7. Доставка. Профиль, которому есть что отправить и которому сутки ничего
+    #    не ушло.
+    #
+    #    Считать надо именно отправляемое, а не всё, что лежит в очереди.
+    #    Первая версия считала любое совпадение в состоянии «новое» — и у
+    #    свежего пользователя срабатывала в первый же день: у него вся очередь
+    #    состоит из накопленного до настройки профиля, а оно по замыслу и не
+    #    отправляется, только лежит в /feed. Тревога, верная по форме и пустая
+    #    по существу, — тот же класс ошибки, ради которого всё это писалось.
+    if not profiles:
+        checks.append(Check("delivery", True, "активных профилей нет — доставлять некому"))
+    else:
+        silent = await _one(db,
+            "SELECT COUNT(*) FROM search_profiles p"
+            " WHERE p.is_paused = 0 AND p.is_enabled = 1"
+            "   AND EXISTS (SELECT 1 FROM matches m JOIN listings l ON l.id = m.listing_id"
+            "                WHERE m.profile_id = p.id AND m.state = 'new'"
+            "                  AND m.stale_at IS NULL AND l.junk_reason IS NULL"
+            "                  AND (p.backlog_before IS NULL OR l.collected_at > p.backlog_before)"
+            "                  AND (m.sent_at IS NULL OR m.sent_at < datetime('now','-1 day')))"
+            "   AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.profile_id = p.id"
+            "                     AND m.sent_at >= datetime('now','-1 day'))") or 0
+        checks.append(Check("delivery", silent == 0,
+                            f"профилей с неотправленными находками за сутки: {silent}"))
 
     # 8. Размер базы.
     if db_path and os.path.exists(db_path):
