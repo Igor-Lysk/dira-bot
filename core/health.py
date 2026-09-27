@@ -166,6 +166,7 @@ async def collect(store: Store, db_path: Optional[str] = None) -> list:
             "   AND EXISTS (SELECT 1 FROM matches m JOIN listings l ON l.id = m.listing_id"
             "                WHERE m.profile_id = p.id AND m.state = 'new'"
             "                  AND m.stale_at IS NULL AND l.junk_reason IS NULL"
+            "                  AND l.removed_at IS NULL"
             "                  AND (p.backlog_before IS NULL OR l.collected_at > p.backlog_before)"
             "                  AND (m.sent_at IS NULL OR m.sent_at < datetime('now','-1 day')))"
             "   AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.profile_id = p.id"

@@ -159,6 +159,15 @@ async def main():
             log.info("страницы объявлений: прочитано %d, дозаполнено %d",
                      result["fetched"], result.get("filled", 0))
 
+    async def job_alive():
+        result = await pipeline.check_removed(
+            store, limit=settings.ALIVE_BATCH, recheck_hours=settings.ALIVE_RECHECK_HOURS,
+            pause_sec=settings.ALIVE_PAUSE_SEC)
+        if result.get("removed") or result.get("blocked"):
+            log.info("проверка снятых: проверено %d, снято %d, непонятно %d%s",
+                     result["checked"], result["removed"], result["unknown"],
+                     ", доска отказала" if result.get("blocked") else "")
+
     async def job_homeless():
         await _collect_board("homeless", homeless.collect)
 
@@ -278,6 +287,7 @@ async def main():
         (job_homeless, settings.HOMELESS_INTERVAL_MIN, "homeless", 60),
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
         (job_details, settings.DETAILS_INTERVAL_MIN, "details", 180),
+        (job_alive, settings.ALIVE_INTERVAL_MIN, "alive", 900),
     ) + ((
         (job_yad2, settings.YAD2_INTERVAL_MIN, "yad2", 240),
     ) if settings.YAD2_ENABLED else ()):

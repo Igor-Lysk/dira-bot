@@ -246,7 +246,8 @@ async def _handle_repost(store: Store, previous: dict, facts, raw: dict, new_id:
     keep_text = previous.get("details_at") is not None
     await store._db.execute(
         "UPDATE listings SET url=?, raw_text=CASE WHEN ? THEN raw_text ELSE ? END,"
-        " last_seen_at=datetime('now'), missed_scans=0, status='extracted' WHERE id=?",
+        " last_seen_at=datetime('now'), missed_scans=0, removed_at=NULL,"
+        " status='extracted' WHERE id=?",
         (raw.get("url") or previous.get("url"), 1 if keep_text else 0,
          raw.get("raw_text"), old_id))
     await store._db.commit()
@@ -387,6 +388,9 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                 "UPDATE listings SET details_at = datetime('now') WHERE id = ?", (lid,))
             if not page:
                 continue
+            if page.get("removed"):
+                await store.mark_removed(lid)
+                continue
             if page["description"]:
                 # описание дописываем к тексту: LLM-слой и фильтр стоп-слов
                 # работают по нему же
@@ -416,6 +420,84 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
     finally:
         await client.aclose()
     return {"fetched": len(rows), "filled": filled}
+
+
+async def check_removed(store: Store, limit: int = 20, recheck_hours: int = 12,
+                        pause_sec: float = 2.5, only_matched: bool = True) -> dict:
+    """Проверить, не сняты ли объявления, которые ушли с первой страницы доски.
+
+    Komo мы читаем только с первой страницы, и пропажа с неё не значит снятия:
+    объявление могли просто вытеснить новые. Поэтому выдача держала их по дате,
+    24 дня, — и показывала в том числе снятые. Первая пользовательская жалоба
+    пришла ровно на такое.
+
+    Ходим не за всеми подряд, а за теми, кого человек может увидеть: ушедшие с
+    первой страницы, ещё свежие по дате и лежащие у кого-то в подборке. Это
+    сотня-другая объявлений, раз в `recheck_hours` каждое. Снятое повторно не
+    проверяется — снятие окончательное, а если доска вернёт объявление в
+    выдачу, отметку снимет обычный скан.
+
+    `only_matched=False` — полный проход по всем свежим объявлениям источника,
+    для ручной чистки базы (scripts/check_removed.py)."""
+    import asyncio
+
+    from collectors import details as details_mod
+    from core.sources import MISSED_SCANS_TO_HIDE, max_age_days
+
+    sources = details_mod.REMOVAL_SOURCES
+    placeholders = ",".join("?" * len(sources))
+    # Возраст считаем так же, как выдача: у каждой доски свой срок
+    age = " OR ".join(
+        f"(l.source = '{src}' AND COALESCE(l.posted_at, l.collected_at)"
+        f" >= date('now', '-{max_age_days(src)} days'))" for src in sources)
+    matched = (" AND EXISTS (SELECT 1 FROM matches m"
+               "  JOIN search_profiles p ON p.id = m.profile_id"
+               "  WHERE m.listing_id = l.id AND m.stale_at IS NULL"
+               "    AND m.state NOT IN ('hidden', 'rejected') AND p.is_enabled = 1)"
+               if only_matched else "")
+    cur = await store._db.execute(
+        "SELECT l.id, l.url, l.source FROM listings l"
+        f" WHERE l.source IN ({placeholders}) AND l.url IS NOT NULL"
+        "   AND l.removed_at IS NULL AND l.junk_reason IS NULL"
+        f"  AND l.missed_scans >= {MISSED_SCANS_TO_HIDE}"
+        f"  AND ({age})"
+        "   AND (l.alive_checked_at IS NULL"
+        "        OR l.alive_checked_at < datetime('now', ?))"
+        + matched +
+        " ORDER BY l.alive_checked_at IS NOT NULL, l.alive_checked_at"
+        + (" LIMIT ?" if limit else ""),
+        (*sources, f"-{int(recheck_hours)} hours", *([limit] if limit else [])))
+    rows = await cur.fetchall()
+    result = {"checked": 0, "removed": 0, "unknown": 0}
+    if not rows:
+        return result
+
+    client = await details_mod.make_client()
+    try:
+        for i, (lid, url, source) in enumerate(rows):
+            if i:
+                # Пауза — чтобы для доски это выглядело как человек, листающий
+                # объявления, а не как обход. Блокировка обойдётся дороже.
+                await asyncio.sleep(pause_sec)
+            verdict = await details_mod.check_alive(client, url, source)
+            if verdict == "blocked":
+                log.warning("проверка снятых: %s отказал, прекращаю проход", source)
+                result["blocked"] = True
+                break
+            result["checked"] += 1
+            if verdict == "removed":
+                await store.mark_removed(lid)
+                result["removed"] += 1
+            elif verdict == "alive":
+                await store._db.execute(
+                    "UPDATE listings SET alive_checked_at = datetime('now') WHERE id = ?",
+                    (lid,))
+                await store._db.commit()
+            else:
+                result["unknown"] += 1
+    finally:
+        await client.aclose()
+    return result
 
 
 def enrichment_can_help(facts: dict, profiles: list) -> Optional[str]:

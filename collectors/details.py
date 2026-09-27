@@ -94,10 +94,51 @@ def _komo(text: str) -> dict:
 PARSERS = {"homeless": _homeless, "komo": _komo}
 
 
+# Страница снятого объявления. Komo отвечает на неё кодом 200 и заголовком
+# «עמוד לא נמצא» — этого достаточно, чтобы убрать объявление из выдачи.
+# У Homeless такого признака нет: страница снятого отдаёт цену и комнаты как
+# ни в чём не бывало (решение 0005), поэтому его здесь нет.
+_REMOVED_MARKERS = {
+    "komo": re.compile(r"<h1>\s*עמוד\s+לא\s+נמצא\s*</h1>"),
+}
+REMOVAL_SOURCES = tuple(_REMOVED_MARKERS)
+
+
+def page_removed(source: str, status: int, html: str) -> bool:
+    """Отвечает ли страница «объявления больше нет»."""
+    if status in (404, 410):
+        return True
+    marker = _REMOVED_MARKERS.get(source)
+    return bool(marker and marker.search(html or ""))
+
+
+async def check_alive(client: httpx.AsyncClient, url: str, source: str) -> Optional[str]:
+    """Жива ли страница объявления.
+
+    'alive' / 'removed' — ответ; 'blocked' — доска отказала (403, 429), дальше
+    в этом проходе ходить не стоит; None — не удалось понять (сеть, 5xx).
+    Непонятное никогда не считается снятым: лучше показать лишнее, чем
+    спрятать живую квартиру из-за таймаута."""
+    try:
+        response = await client.get(url)
+    except Exception as e:                            # noqa: BLE001
+        log.warning("проверка %s: %s", url, type(e).__name__)
+        return None
+    if page_removed(source, response.status_code, response.text):
+        return "removed"
+    if response.status_code in (403, 429):
+        return "blocked"
+    if response.status_code != 200:
+        return None
+    return "alive"
+
+
 async def fetch(client: httpx.AsyncClient, url: str, source: str) -> Optional[dict]:
     """Скачать и разобрать страницу объявления. None — если не получилось."""
     try:
         response = await client.get(url)
+        if page_removed(source, response.status_code, response.text):
+            return {"removed": True}
         response.raise_for_status()
     except Exception as e:                            # noqa: BLE001
         log.warning("страница %s: %s", url, type(e).__name__)
