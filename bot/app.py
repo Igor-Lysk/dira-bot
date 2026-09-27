@@ -13,15 +13,18 @@
 import logging
 from contextlib import suppress
 from datetime import datetime, timezone
+from html import escape
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import (CallbackQuery, ErrorEvent, InlineKeyboardButton,
-                           InlineKeyboardMarkup, Message, TelegramObject)
+                           InlineKeyboardMarkup, Message, ReplyParameters,
+                           TelegramObject)
 
 from bot import cards, wizard
+from core import feedback
 from core import market as market_mod
 from core.store import Store
 
@@ -308,7 +311,10 @@ async def on_wizard(callback: CallbackQuery, user: dict, store: Store):
 
 @router.message(F.text, ~F.text.startswith("/"))
 async def on_text(message: Message, user: dict, store: Store):
-    """Свободный текст принимается только там, где визард его ждёт — число или список."""
+    """Свободный текст принимается только там, где его ждут: визард — число или
+    список, жалоба «Другое» — фразу."""
+    if await _take_complaint_text(message, user, store):
+        return
     key = user.get("onboarding_step")
     if not key or key == "done":
         await message.answer("Не понял. /feed — лента, /settings — критерии.")
@@ -400,10 +406,22 @@ async def on_details(callback: CallbackQuery, user: dict, store: Store):
     await callback.message.answer(cards.details(facts or {}))
 
 
-WRONG_FIELDS = [
-    ("price", "Цена"), ("rooms", "Комнаты"), ("mamad", "Мамад"),
-    ("address", "Адрес"), ("other", "Другое"),
-]
+def _two_per_row(buttons: list) -> list:
+    rows = []
+    for i in range(0, len(buttons), 2):
+        rows.append(buttons[i:i + 2])
+    return rows
+
+
+async def _notify_complaint(bot, store: Store, user: dict, listing_id: str, what: str,
+                            extra: str = ""):
+    from core import notify
+    who = f"@{user['username']}" if user.get("username") else escape(user.get("first_name") or "")
+    await notify.notify_admins(
+        bot, store,
+        f"Жалоба от {who}: {escape(what)}, объявление <code>{listing_id}</code>"
+        + (f"\n\n{extra}" if extra else ""),
+        exclude=user["telegram_id"])
 
 
 @router.callback_query(F.data.startswith("e:"))
@@ -412,39 +430,135 @@ async def on_wrong_data(callback: CallbackQuery, user: dict, store: Store):
 
     Один лишний тап превращает жалобу в адрес поломки. «Что-то не так» чинить
     нельзя: в карточке полтора десятка полей, и без уточнения остаётся гадать.
-    """
+
+    Вопрос уходит ответом на карточку: по этой связи ответ на жалобу потом
+    найдёт, к какому сообщению прицепиться."""
     listing_id = callback.data.split(":", 1)[1]
-    rows, row = [], []
-    for code, label in WRONG_FIELDS:
-        row.append(InlineKeyboardButton(text=label, callback_data=f"ew:{code}:{listing_id}"))
-        if len(row) == 2:
-            rows.append(row); row = []
-    if row:
-        rows.append(row)
+    buttons = [InlineKeyboardButton(text=label, callback_data=f"ew:{code}:{listing_id}")
+               for code, label in feedback.KINDS]
     await callback.answer()
     await callback.message.answer(
         "Что именно неверно?",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=_two_per_row(buttons)),
+        reply_parameters=ReplyParameters(message_id=callback.message.message_id,
+                                         allow_sending_without_reply=True))
 
 
 @router.callback_query(F.data.startswith("ew:"))
 async def on_wrong_field(callback: CallbackQuery, user: dict, store: Store):
-    """Жалоба принята: стираем спорное поле и возвращаем объявление в разбор."""
-    from core.pipeline import mark_disputed
-    _, field, listing_id = callback.data.split(":", 2)
-    label = dict(WRONG_FIELDS).get(field, field)
-    ok = await mark_disputed(store, listing_id, field)
-    await store.log_action(user["telegram_id"], "wrong_data", listing_id, {"field": field})
+    """Жалоба выбрана — дальше по виду (core/feedback.py)."""
+    from core.pipeline import mark_disputed, recheck_listing
+    _, kind, listing_id = callback.data.split(":", 2)
+    uid = user["telegram_id"]
+    label = feedback.LABELS.get(kind, kind)
+    card = callback.message.reply_to_message
+    card_msg_id = card.message_id if card else None
+    chat_id = callback.message.chat.id
+    profiles = await store.profiles_of(uid)
+    profile = profiles[0] if profiles else None
+    facts = await store.get_facts(listing_id)
+    await store.log_action(uid, "wrong_data", listing_id, {"field": kind})
     await callback.answer()
-    await callback.message.edit_text(
-        f"Записал: {label.lower()}. Разберу это объявление заново — "
-        f"обычно в течение десяти минут." if ok else
-        "Объявление уже не в базе, но жалобу записал.")
-    from core import notify
-    await notify.notify_admins(
-        callback.bot, store,
-        f"Жалоба на данные: {label.lower()}, объявление <code>{listing_id}</code>",
-        exclude=user["telegram_id"])
+
+    if not facts:
+        await callback.message.edit_text("Объявление уже не в базе, но жалобу записал.")
+        await _notify_complaint(callback.bot, store, user, listing_id, label.lower())
+        return
+
+    extra = ""
+    if kind in feedback.REPARSE_KINDS:
+        before = feedback.snapshot(kind, facts)
+        await mark_disputed(store, listing_id, kind)
+        await feedback.record(store, uid, listing_id, kind, before=before,
+                              chat_id=chat_id, card_msg_id=card_msg_id)
+        text = (f"Записал: {feedback.WHAT[kind]}. Разберу объявление заново и напишу, "
+                f"что вышло, — обычно в течение десяти минут.")
+
+    elif kind == "removed":
+        text = await feedback.handle_removed(store, profile, listing_id, facts)
+        await feedback.record(store, uid, listing_id, kind, status="closed", reply=text,
+                              chat_id=chat_id, card_msg_id=card_msg_id)
+
+    elif kind == "duplicate":
+        await feedback.hide_for(store, profile, listing_id)
+        text = "Из ленты убрал. Передал разработчику — чтобы такие повторы склеивались сами."
+        await feedback.record(store, uid, listing_id, kind, status="closed", reply=text,
+                              chat_id=chat_id, card_msg_id=card_msg_id)
+        extra = feedback.similar_text(await feedback.similar(store, facts, listing_id))
+
+    elif kind == "agent":
+        before = feedback.snapshot(kind, facts)
+        text, _ = await feedback.apply_agent(store, listing_id, facts)
+        changes = await recheck_listing(store, listing_id)
+        if profile and changes.get(profile["id"]) in ("dropped", "stale"):
+            text += "\nИз твоей ленты тоже убрал."
+        await feedback.record(store, uid, listing_id, kind, before=before, status="closed",
+                              reply=text, chat_id=chat_id, card_msg_id=card_msg_id)
+
+    elif kind == "notfit":
+        options = feedback.notfit_options(profile) if profile else []
+        if options:
+            buttons = [InlineKeyboardButton(text=lbl, callback_data=f"nf:{code}:{listing_id}")
+                       for code, lbl in options]
+            await callback.message.edit_text(
+                "Какой из твоих критериев не совпал?",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=_two_per_row(buttons)))
+            return                                    # жалоба запишется после выбора
+        await feedback.hide_for(store, profile, listing_id)
+        text = "Из ленты убрал."
+        await feedback.record(store, uid, listing_id, kind, status="closed", reply=text,
+                              chat_id=chat_id, card_msg_id=card_msg_id)
+
+    elif kind == "other":
+        await feedback.record(store, uid, listing_id, kind, status="awaiting_text",
+                              chat_id=chat_id, card_msg_id=card_msg_id)
+        await callback.message.edit_text("Напиши одной фразой, что не так, — передам разработчику.")
+        return                                        # уведомление уйдёт вместе с текстом
+
+    else:
+        text = "Жалобу записал."
+
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML,
+                                     disable_web_page_preview=True)
+    await _notify_complaint(callback.bot, store, user, listing_id, label.lower(), extra)
+
+
+@router.callback_query(F.data.startswith("nf:"))
+async def on_notfit(callback: CallbackQuery, user: dict, store: Store):
+    """«Не подходит мне» + критерий: объяснить, почему прошло, и убрать из ленты."""
+    _, code, listing_id = callback.data.split(":", 2)
+    uid = user["telegram_id"]
+    profiles = await store.profiles_of(uid)
+    profile = profiles[0] if profiles else None
+    facts = await store.get_facts(listing_id)
+    await callback.answer()
+    if not facts or not profile:
+        await callback.message.edit_text("Объявление уже не в базе.")
+        return
+    text = feedback.explain_notfit(code, facts, profile)
+    await feedback.hide_for(store, profile, listing_id)
+    text += ("\n\nЕсли в карточке ошибка — нажми «⚠️ Данные неверны» и выбери поле."
+             "\nИз ленты убрал.")
+    card = callback.message.reply_to_message
+    await feedback.record(store, uid, listing_id, "notfit", detail=code, status="closed",
+                          reply=text, chat_id=callback.message.chat.id,
+                          card_msg_id=card.message_id if card else None)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML)
+    await _notify_complaint(callback.bot, store, user, listing_id,
+                            f"не подходит — {feedback.notfit_label(code).lower()}")
+
+
+async def _take_complaint_text(message: Message, user: dict, store: Store) -> bool:
+    """Текст после «Другое». True — сообщение было им и уже обработано."""
+    pending = await feedback.awaiting_text(store, user["telegram_id"])
+    if not pending:
+        return False
+    await feedback.close(store, pending["id"], "Спасибо, передал разработчику.",
+                         detail=message.text)
+    await message.answer("Спасибо, передал разработчику.")
+    await _notify_complaint(message.bot, store, user, pending["listing_id"], "другое",
+                            f"«{escape(message.text)}»")
+    return True
 
 
 # ── настройки и статистика ───────────────────────────────────────────────────

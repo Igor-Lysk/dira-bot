@@ -16,6 +16,7 @@ score 0», и объявление терялось навсегда (F-11).
 """
 
 import hashlib
+import json
 import logging
 from datetime import datetime
 import re
@@ -285,6 +286,60 @@ async def match_listing(store: Store, lid: str) -> int:
             if await store.add_match(profile["id"], lid, result.rank, result.reasons):
                 created += 1
     return created
+
+
+async def recheck_listing(store: Store, lid: str) -> dict:
+    """Перепроверить одно объявление по всем профилям после правки его фактов.
+
+    `match_listing` только добавляет совпадения — для нового объявления этого
+    достаточно. После жалобы факты меняются у уже разосланного: исправленная
+    цена может вывести его за чей-то потолок, а отметка «агент» — из ленты тех,
+    кто ищет без комиссии. Здесь то же, что второй проход `rematch_profile`,
+    только по одному объявлению и всем профилям сразу.
+
+    Возвращает {profile_id: added | kept | revived | dropped | stale}."""
+    facts = await store.get_facts(lid)
+    if not facts:
+        return {}
+    own = await market_mod.medians(store)
+    assessment = market_mod.assess(facts, own)
+    cur = await store._db.execute(
+        "SELECT profile_id, state, sent_at, stale_at FROM matches WHERE listing_id=?", (lid,))
+    existing = {r["profile_id"]: dict(r) for r in await cur.fetchall()}
+    profiles = {p["id"]: p for p in await store.active_profiles()}
+    for pid in existing:
+        if pid not in profiles:
+            profile = await store.get_profile(pid)
+            if profile:
+                profiles[pid] = profile
+
+    out = {}
+    for pid, profile in profiles.items():
+        result = match(facts, profile, market=assessment)
+        row = existing.get(pid)
+        if result.matched:
+            if row is None:
+                if await store.add_match(pid, lid, result.rank, result.reasons):
+                    out[pid] = "added"
+                continue
+            await store._db.execute(
+                "UPDATE matches SET rank=?, reasons=?, stale_at=NULL"
+                " WHERE profile_id=? AND listing_id=?",
+                (result.rank, json.dumps(result.reasons, ensure_ascii=False), pid, lid))
+            out[pid] = "revived" if row["stale_at"] else "kept"
+        elif row is not None:
+            if row["state"] == "new" and not row["sent_at"]:
+                await store._db.execute(
+                    "DELETE FROM matches WHERE profile_id=? AND listing_id=?", (pid, lid))
+                out[pid] = "dropped"
+            else:
+                if not row["stale_at"]:
+                    await store._db.execute(
+                        "UPDATE matches SET stale_at=datetime('now')"
+                        " WHERE profile_id=? AND listing_id=?", (pid, lid))
+                out[pid] = "stale"
+    await store._db.commit()
+    return out
 
 
 async def rematch_profile(store: Store, profile_id: int, days: int = 14, limit: int = 500) -> int:
