@@ -267,7 +267,7 @@ async def _handle_repost(store: Store, previous: dict, facts, raw: dict, new_id:
         await store._db.execute(
             "UPDATE matches SET state='new' WHERE listing_id=? AND state='sent'", (old_id,))
         await store._db.commit()
-    await match_listing(store, old_id)
+    await recheck_listing(store, old_id)     # факты перезаписаны повтором
     return {"status": "repost", "listing_id": old_id, "price_changed": changed,
             "old_price": old_price, "new_price": facts.price}
 
@@ -288,7 +288,7 @@ async def match_listing(store: Store, lid: str) -> int:
     return created
 
 
-async def recheck_listing(store: Store, lid: str) -> dict:
+async def recheck_listing(store: Store, lid: str, add_new: bool = True) -> dict:
     """Перепроверить одно объявление по всем профилям после правки его фактов.
 
     `match_listing` только добавляет совпадения — для нового объявления этого
@@ -297,7 +297,11 @@ async def recheck_listing(store: Store, lid: str) -> dict:
     кто ищет без комиссии. Здесь то же, что второй проход `rematch_profile`,
     только по одному объявлению и всем профилям сразу.
 
-    Возвращает {profile_id: added | kept | revived | dropped | stale}."""
+    `add_new=False` — только убирать переставшее подходить, новых совпадений не
+    заводить. Для разовой чистки базы: там по старым объявлениям пришлось бы
+    заводить совпадения, которых `rematch_profile` сознательно не заводит.
+
+    Возвращает {profile_id: added | kept | revived | dropped | stale | still_stale}."""
     facts = await store.get_facts(lid)
     if not facts:
         return {}
@@ -319,7 +323,7 @@ async def recheck_listing(store: Store, lid: str) -> dict:
         row = existing.get(pid)
         if result.matched:
             if row is None:
-                if await store.add_match(pid, lid, result.rank, result.reasons):
+                if add_new and await store.add_match(pid, lid, result.rank, result.reasons):
                     out[pid] = "added"
                 continue
             await store._db.execute(
@@ -332,11 +336,12 @@ async def recheck_listing(store: Store, lid: str) -> dict:
                 await store._db.execute(
                     "DELETE FROM matches WHERE profile_id=? AND listing_id=?", (pid, lid))
                 out[pid] = "dropped"
+            elif row["stale_at"]:
+                out[pid] = "still_stale"             # уже было убрано раньше
             else:
-                if not row["stale_at"]:
-                    await store._db.execute(
-                        "UPDATE matches SET stale_at=datetime('now')"
-                        " WHERE profile_id=? AND listing_id=?", (pid, lid))
+                await store._db.execute(
+                    "UPDATE matches SET stale_at=datetime('now')"
+                    " WHERE profile_id=? AND listing_id=?", (pid, lid))
                 out[pid] = "stale"
     await store._db.commit()
     return out
@@ -470,7 +475,7 @@ async def fetch_details(store: Store, limit: int = 15) -> dict:
                 current = (await store.get_facts(lid) or {}).get("llm_attempts")
                 await store.save_facts(lid, {"source_layer": "rules", "llm_at": None,
                                              "llm_attempts": _room_for_one_more(current)})
-            await match_listing(store, lid)
+            await recheck_listing(store, lid)
         await store._db.commit()
     finally:
         await client.aclose()
@@ -662,7 +667,12 @@ async def enrich_pending(store: Store, client, model: str, limit: int = 25) -> d
             await store._db.commit()
             junk += 1
             continue
-        await match_listing(store, lid)     # факты изменились — пересчитываем
+        # Факты изменились — перепроверяем по всем профилям, а не только ищем
+        # новые совпадения. Цена, дописанная моделью, могла вывести уже
+        # разосланное объявление за чей-то потолок: при подборе цены не было,
+        # и «нет данных» его пропускало. Так в лентах набралось семь квартир
+        # дороже потолка.
+        await recheck_listing(store, lid)
         done += 1
     result = {"enriched": done, "failed": failed, "cost_usd": round(spent, 4)}
     if skipped:
@@ -717,7 +727,7 @@ async def mark_disputed(store: Store, listing_id: str, field: str) -> bool:
     changes["llm_attempts"] = _room_for_one_more(row.get("llm_attempts"))
     await store.save_facts(listing_id, changes)
     await store.set_status(listing_id, "extracted")
-    await match_listing(store, listing_id)
+    await recheck_listing(store, listing_id)
     return True
 
 
