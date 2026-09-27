@@ -21,7 +21,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot.app import SORTS, FILTERS          # noqa: E402
-from core.pipeline import check_removed    # noqa: E402
+from core import feedback                   # noqa: E402
+from core.pipeline import check_removed, recheck_listing  # noqa: E402
 from core.store import Store                # noqa: E402
 from db.migrate import migrate              # noqa: E402
 
@@ -50,6 +51,13 @@ async def main() -> int:
         ("mark_removed", store.mark_removed("x")),
         ("check_removed", check_removed(store, limit=5)),
         ("check_removed full", check_removed(store, limit=0, only_matched=False)),
+        ("recheck_listing", recheck_listing(store, "x")),
+        ("ensure_user", store.ensure_user(1, "u", "U")),
+        ("feedback record", feedback.record(store, 1, None, "other", status="awaiting_text")),
+        ("feedback awaiting", feedback.awaiting_text(store, 1)),
+        ("feedback similar", feedback.similar(store, {"city": "Tel Aviv", "rooms": 2,
+                                                      "price": 5000}, "x")),
+        ("feedback waiting", feedback.process_waiting(None, store)),
     ]
     # лента: каждая сортировка против каждого фильтра
     for order, _ in SORTS:

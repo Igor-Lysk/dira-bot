@@ -23,7 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from bot.app import build
 from collectors import homeless, komo, yad2
 from collectors.telegram_v2 import TelegramMonitor
-from core import delivery, health, notify, pipeline, settings
+from core import delivery, feedback, health, notify, pipeline, settings
 from core.sources import channels_for
 from core.store import Store
 from db.migrate import migrate
@@ -168,6 +168,11 @@ async def main():
                      result["checked"], result["removed"], result["unknown"],
                      ", доска отказала" if result.get("blocked") else "")
 
+    async def job_feedback():
+        result = await feedback.process_waiting(bot, store)
+        if result.get("answered"):
+            log.info("ответы на жалобы: отправлено %d", result["answered"])
+
     async def job_homeless():
         await _collect_board("homeless", homeless.collect)
 
@@ -288,6 +293,7 @@ async def main():
         (job_komo, settings.KOMO_INTERVAL_MIN, "komo", 120),
         (job_details, settings.DETAILS_INTERVAL_MIN, "details", 180),
         (job_alive, settings.ALIVE_INTERVAL_MIN, "alive", 900),
+        (job_feedback, settings.FEEDBACK_INTERVAL_MIN, "feedback", 200),
     ) + ((
         (job_yad2, settings.YAD2_INTERVAL_MIN, "yad2", 240),
     ) if settings.YAD2_ENABLED else ()):
