@@ -74,7 +74,9 @@ def _freshness_sql(alias: str = "l") -> str:
     known = ",".join(f"'{s}'" for s in set(MAX_AGE_DAYS) | set(PRESENCE_SOURCES))
     parts.append(f"({alias}.source NOT IN ({known}) AND COALESCE({alias}.posted_at,"
                  f" {alias}.collected_at) >= date('now', '-{DEFAULT_MAX_AGE_DAYS} days'))")
-    return (f" AND {alias}.junk_reason IS NULL"
+    # Снятое с доски не показываем при любой свежести: страница уже ответила
+    # «не найдено», и дата публикации тут ничего не решает (решение 0008).
+    return (f" AND {alias}.junk_reason IS NULL AND {alias}.removed_at IS NULL"
             " AND (" + " OR ".join(parts) + ")")
 
 
@@ -224,6 +226,16 @@ class Store:
         await self._db.commit()
         return True
 
+    async def mark_removed(self, listing_id: str):
+        """Страница объявления ответила «не найдено»: из выдачи и очереди убираем.
+
+        Из базы не удаляем — история цен и медианы по району от этого только
+        выигрывают, как и со снятыми по присутствию (решение 0005)."""
+        await self._db.execute(
+            "UPDATE listings SET removed_at = COALESCE(removed_at, datetime('now')),"
+            " alive_checked_at = datetime('now') WHERE id = ?", (listing_id,))
+        await self._db.commit()
+
     async def mark_seen(self, source: str, source_ids: list) -> dict:
         """Отметить, какие объявления источника есть в свежем скане.
 
@@ -235,7 +247,10 @@ class Store:
             return {"seen": 0, "missed": 0}
         placeholders = ",".join("?" * len(source_ids))
         await self._db.execute(
-            f"UPDATE listings SET last_seen_at = datetime('now'), missed_scans = 0"
+            # Вернулось в выдачу — значит живо, даже если раньше страница
+            # отвечала «не найдено»: доска могла восстановить объявление.
+            f"UPDATE listings SET last_seen_at = datetime('now'), missed_scans = 0,"
+            f" removed_at = NULL"
             f" WHERE source = ? AND source_id IN ({placeholders})",
             (source, *source_ids))
         cur = await self._db.execute(
