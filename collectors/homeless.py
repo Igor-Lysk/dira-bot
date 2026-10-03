@@ -154,7 +154,7 @@ async def collect(cities: list) -> list:
                     response = await client.get(url)
                     response.raise_for_status()
                 except Exception as e:                # noqa: BLE001
-                    log.warning("homeless %s стр. %d: %s", name, page, e)
+                    log.warning("homeless %s стр. %d: %s: %s", name, page, type(e).__name__, e)
                     break
                 fresh = 0
                 for ad_id, body in _ROW_RE.findall(response.text):
