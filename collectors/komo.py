@@ -113,7 +113,7 @@ async def collect(cities: list) -> list:
                 response = await client.get(url)
                 response.raise_for_status()
             except Exception as e:                    # noqa: BLE001
-                log.warning("komo %s: %s", name, e)
+                log.warning("komo %s: %s: %s", name, type(e).__name__, e)
                 continue
             found = 0
             for ad_id, block in [(m.group(1), m.group(0)) for m in _AD_RE.finditer(response.text)]:

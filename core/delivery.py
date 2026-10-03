@@ -113,6 +113,12 @@ async def deliver_realtime(bot, store: Store, profile: dict) -> int:
 
     queue = await store.queue_for(profile["id"], limit=min(room, BURST_LIMIT), since=since)
     if not queue:
+        # Тихие часы кончились, а за ночь ничего не накопилось — отметку
+        # снимаем сразу. Иначе она доживала до первой отправки, пусть даже
+        # вечерней, и три объявления из одного дневного скана уходили списком
+        # «Пока тебя не беспокоили», хотя никто их не придерживал.
+        if profile.get("quiet_held_at"):
+            await store.update_profile(profile["id"], quiet_held_at=None)
         return 0
 
     held = profile.get("quiet_held_at")
