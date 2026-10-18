@@ -36,6 +36,9 @@ log = logging.getLogger(__name__)
 # Цены Anthropic за миллион токенов. Нужны, чтобы расход считался, а не
 # оценивался по памяти, как в v1 («примерно $1–2»).
 PRICES_USD_PER_MTOK = {
+    # У Haiku 5.5 цена ступенчатая: промпт свыше 100k токенов стоит $0.50 / $2.50.
+    # Наш промпт — несколько тысяч токенов, до второй ступени не доходит.
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5-20251001": (1.00, 5.00),
 }
 DEFAULT_PRICE = (1.00, 5.00)
@@ -293,8 +296,13 @@ async def fill_gaps(text: str, facts: Facts, client, model: str) -> Tuple[Facts,
         return facts, {"skipped": True}
 
     try:
+        # Рассуждение выключено явно. Haiku 5.5 по умолчанию сначала думает:
+        # на корпусе это втрое-вчетверо больше выходных токенов, и при
+        # max_tokens=900 ответ обрывался посреди JSON. Для чтения фактов из
+        # текста рассуждение не нужно (ADR 0010).
         message = await client.messages.create(
             model=model, max_tokens=900, system=SYSTEM,
+            thinking={"type": "disabled"},
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as e:                      # noqa: BLE001

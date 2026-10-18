@@ -47,7 +47,7 @@ async def main():
     args = ap.parse_args()
 
     env = load_env()
-    model = env.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+    model = env.get("CLAUDE_MODEL", "claude-haiku-5-5")
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=env["ANTHROPIC_API_KEY"])
 

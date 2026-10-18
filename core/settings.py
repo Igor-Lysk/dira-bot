@@ -33,7 +33,7 @@ TG_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 TG_SESSION = os.getenv("TELEGRAM_SESSION_STRING", "")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")
 
 # Прокси для Yad2: пробуются по порядку, у каждого свой бесплатный лимит.
 SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "")
