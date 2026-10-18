@@ -299,8 +299,10 @@ def fix_entry_year(value, text: str, ref: Optional[date] = None):
 
     Если года в тексте нет — берём ту же дату ближайшего года, не раньше чем
     за месяц до ref (момента публикации или разбора). Если год в тексте есть,
-    верим ему, но дата старше года — это не въезд, а что-то другое из текста
-    («дом 2015 года»), и такое значение выбрасываем.
+    верим ему, пока дата не старше года. Старше — значит, год взят из другого
+    места текста: «новый дом, 2024 г.», цена «2020₪». День и месяц при этом
+    обычно верные («с 15 сентября»), поэтому дату не выбрасываем, а переносим
+    так же, как если бы года не было.
     """
     if not isinstance(value, str):
         return value
@@ -309,8 +311,8 @@ def fix_entry_year(value, text: str, ref: Optional[date] = None):
     except ValueError:
         return value                            # «now» и всё нестандартное — как есть
     ref = ref or date.today()
-    if _year_in_text(parsed.year, text or ""):
-        return value if parsed >= ref - timedelta(days=365) else None
+    if _year_in_text(parsed.year, text or "") and parsed >= ref - timedelta(days=365):
+        return value
     floor = ref - timedelta(days=ENTRY_PAST_GRACE_DAYS)
     for year in (floor.year, floor.year + 1):
         candidate = _same_day(parsed, year)
