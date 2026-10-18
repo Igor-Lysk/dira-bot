@@ -27,6 +27,7 @@
 import json
 import logging
 import re
+from datetime import date, timedelta
 from typing import Optional, Tuple
 
 from .schema import Facts, SCHEMA_VERSION
@@ -267,13 +268,70 @@ def _clean(name: str, value):
     return text
 
 
-def merge(facts: Facts, payload: dict) -> Facts:
-    """Дописать в пустые поля. Значения регулярок не трогаем — они надёжнее."""
+# ── год в дате въезда ────────────────────────────────────────────────────────
+
+# Насколько дата въезда может быть в прошлом и всё ещё значить именно её:
+# «с 1 октября» в объявлении от 15 октября — «уже свободна», а не «через год».
+ENTRY_PAST_GRACE_DAYS = 31
+
+
+def _year_in_text(year: int, text: str) -> bool:
+    if str(year) in text:
+        return True
+    # 5.06.26, 05/06/26
+    return re.search(rf"\b\d{{1,2}}[./-]\d{{1,2}}[./-]{year % 100:02d}\b", text) is not None
+
+
+def _same_day(d: date, year: int) -> date:
+    try:
+        return d.replace(year=year)
+    except ValueError:                          # 29 февраля в невисокосный год
+        return d.replace(year=year, day=28)
+
+
+def fix_entry_year(value, text: str, ref: Optional[date] = None):
+    """Поправить год в дате въезда, если его придумала модель.
+
+    В объявлениях год почти не пишут («с 3 апреля»), а текущей даты модель не
+    знает и ставит год из своего обучения: на корпусе 2024 у Haiku 4.5 и 2025 у
+    Haiku 5.5 (решение 0010). В карточке получалось «въезд 2025-04-03» — дата
+    в прошлом, будто объявление протухло.
+
+    Если года в тексте нет — берём ту же дату ближайшего года, не раньше чем
+    за месяц до ref (момента публикации или разбора). Если год в тексте есть,
+    верим ему, но дата старше года — это не въезд, а что-то другое из текста
+    («дом 2015 года»), и такое значение выбрасываем.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return value                            # «now» и всё нестандартное — как есть
+    ref = ref or date.today()
+    if _year_in_text(parsed.year, text or ""):
+        return value if parsed >= ref - timedelta(days=365) else None
+    floor = ref - timedelta(days=ENTRY_PAST_GRACE_DAYS)
+    for year in (floor.year, floor.year + 1):
+        candidate = _same_day(parsed, year)
+        if candidate >= floor:
+            return candidate.isoformat()
+    return value
+
+
+def merge(facts: Facts, payload: dict, text: str = "", ref: Optional[date] = None) -> Facts:
+    """Дописать в пустые поля. Значения регулярок не трогаем — они надёжнее.
+
+    text и ref нужны только для года в дате въезда: даты из регулярок и с досок
+    сюда не попадают (поле уже заполнено), правится только ответ модели.
+    """
     changed = False
     for name, value in (payload or {}).items():
         if not hasattr(facts, name) or getattr(facts, name) is not None:
             continue
         cleaned = _clean(name, value)
+        if name == "entry_date" and cleaned is not None:
+            cleaned = fix_entry_year(cleaned, text, ref)
         if cleaned is None:
             continue
         setattr(facts, name, cleaned)
@@ -324,7 +382,7 @@ async def fill_gaps(text: str, facts: Facts, client, model: str) -> Tuple[Facts,
     if len(blocks) > 1:
         log.info("ответ модели пришёл %d блоками", len(blocks))
     payload = parse_response("".join(blocks))
-    facts = merge(facts, payload)
+    facts = merge(facts, payload, text)
     usage = getattr(message, "usage", None)
     tokens_in = getattr(usage, "input_tokens", 0)
     tokens_out = getattr(usage, "output_tokens", 0)
